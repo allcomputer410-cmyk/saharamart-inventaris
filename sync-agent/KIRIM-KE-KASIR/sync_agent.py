@@ -406,8 +406,8 @@ def sync_stock(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str) ->
 # SYNC: Sales (tbl_ikhd + tbl_ikdt → daily_sales + daily_sale_items)
 # ---------------------------------------------------------------------------
 def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
-               days_back: int = 7) -> int:
-    """Sync daily sales from iPOS to daily_sales + daily_sale_items."""
+               days_back: int = 30) -> int:
+    """Sync daily sales dari iPOS ke daily_sales + daily_sale_items."""
     log.info(f"Syncing sales for store {kodekantor} (last {days_back} days)...")
 
     since_date = (date.today() - timedelta(days=days_back)).isoformat()
@@ -432,15 +432,22 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
         cur.close()
         return 0
 
-    # Get product mapping (select_all: bypass 1000-row limit)
+    # Get product mapping — gunakan ipos_kodeitem, fallback ke barcode
+    # (fallback diperlukan jika produk disync sebelum kolom ipos_kodeitem terisi)
     products = sb.select_all("store_products", {
         "store_id": f"eq.{store_id}",
-        "select": "id,ipos_kodeitem,hpp",
+        "select": "id,ipos_kodeitem,barcode,hpp",
     })
-    prod_map = {p["ipos_kodeitem"]: p for p in products if p.get("ipos_kodeitem")}
+    prod_map: dict = {}
+    for p in products:
+        key = str(p.get("ipos_kodeitem") or p.get("barcode") or "").strip()
+        if key:
+            prod_map[key] = p
+    log.info(f"Product map: {len(prod_map)} produk (dari {len(products)} di store_products)")
 
     now = datetime.utcnow().isoformat()
     count = 0
+    total_items_inserted = 0
 
     for daily in daily_totals:
         sale_date = str(daily["sale_date"])
@@ -465,9 +472,11 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
         # Calculate profit from item details
         total_hpp = 0.0
         sale_items = []
+        skipped = 0
         for item in items:
             kode = str(item["kodeitem"]).strip()
             if kode not in prod_map:
+                skipped += 1
                 continue
             prod = prod_map[kode]
             qty = dec(item.get("qty_sold"))
@@ -482,6 +491,17 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
                 "profit": rev - hpp,
                 "avg_sell_price": dec(item.get("avg_price")),
             })
+
+        if skipped > 0:
+            log.warning(
+                f"{sale_date}: {skipped}/{len(items)} item dilewati "
+                f"— kodeitem tidak ditemukan di store_products"
+            )
+        if not sale_items and items:
+            log.warning(
+                f"{sale_date}: {len(items)} item di tbl_ikdt tapi 0 cocok "
+                f"— pastikan sync produk sudah dijalankan terlebih dahulu"
+            )
 
         total_profit = total_revenue - total_hpp
 
@@ -498,31 +518,39 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
 
         result = sb.upsert("daily_sales", daily_data, on_conflict="store_id,sale_date")
 
-        # Insert sale items if we got a daily_sale_id back
+        # Insert sale items
         if result and sale_items:
             daily_sale_id = result[0]["id"]
 
-            # Delete existing items for this day (re-sync)
+            # Hapus item lama untuk hari ini sebelum insert ulang
             try:
-                requests.delete(
+                del_resp = requests.delete(
                     f"{sb.base}/rest/v1/daily_sale_items",
                     headers=sb.headers,
                     params={"daily_sale_id": f"eq.{daily_sale_id}"},
                 )
-            except Exception:
-                pass
+                if not del_resp.ok:
+                    log.warning(f"Delete items {sale_date}: HTTP {del_resp.status_code}")
+            except Exception as e:
+                log.warning(f"Delete items {sale_date} gagal: {e}")
 
-            # Insert fresh items
+            # Insert item baru
             for si in sale_items:
                 si["daily_sale_id"] = daily_sale_id
-            BATCH = 500
-            for i in range(0, len(sale_items), BATCH):
-                sb.insert("daily_sale_items", sale_items[i : i + BATCH])
+            try:
+                BATCH = 500
+                for i in range(0, len(sale_items), BATCH):
+                    sb.insert("daily_sale_items", sale_items[i : i + BATCH])
+                total_items_inserted += len(sale_items)
+                log.debug(f"{sale_date}: inserted {len(sale_items)} sale items")
+            except Exception as e:
+                log.error(f"Insert daily_sale_items gagal untuk {sale_date}: {e}")
+                raise
 
         count += 1
 
     cur.close()
-    log.info(f"Synced {count} days of sales data")
+    log.info(f"Synced {count} hari, {total_items_inserted} total sale items inserted")
     return count
 
 
@@ -872,7 +900,8 @@ def run_sync(sync_type: str = "full"):
             # Sync sales
             if sync_type in ("full", "sales"):
                 try:
-                    total_records += sync_sales(ipos_conn, sb, store_id, kodekantor)
+                    total_records += sync_sales(
+                        ipos_conn, sb, store_id, kodekantor, config.SALES_DAYS_BACK)
                 except Exception as e:
                     log.error(f"Sales sync failed: {e}")
                     errors.append(f"Sales: {str(e)}")
@@ -891,7 +920,7 @@ def run_sync(sync_type: str = "full"):
             if sync_type in ("full", "sales"):
                 try:
                     total_records += sync_sales_transactions(
-                        ipos_conn, sb, kodekantor, store_id)
+                        ipos_conn, sb, kodekantor, store_id, config.SALES_DAYS_BACK)
                 except Exception as e:
                     log.error(f"Sales transactions sync failed: {e}")
                     errors.append(f"SalesTransactions: {str(e)}")

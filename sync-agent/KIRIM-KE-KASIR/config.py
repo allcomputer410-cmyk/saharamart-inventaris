@@ -23,5 +23,9 @@ IPOS_DB_PASS = os.getenv("IPOS_DB_PASS", "")
 # Sync interval in minutes
 SYNC_INTERVAL = int(os.getenv("SYNC_INTERVAL", "15"))
 
+# Jumlah hari ke belakang untuk sync penjualan (daily_sales + daily_sale_items)
+# Set ke 90 atau 365 untuk re-sync data historis pertama kali
+SALES_DAYS_BACK = int(os.getenv("SALES_DAYS_BACK", "30"))
+
 # Log level
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
