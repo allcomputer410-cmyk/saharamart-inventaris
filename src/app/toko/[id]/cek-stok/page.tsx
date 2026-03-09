@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { ScanLine, Search, Trash2, Send, RotateCcw, Loader2, Plus, Minus } from 'lucide-react';
+import { ScanLine, Search, Trash2, Send, RotateCcw, Loader2, Plus, Minus, Keyboard } from 'lucide-react';
 import { formatRupiah, formatQty } from '@/lib/utils';
 
 interface CekStokItem {
@@ -40,9 +40,16 @@ export default function CekStokPage() {
   const [searching, setSearching] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [scannerError, setScannerError] = useState('');
-  const scannerRef = useRef<HTMLDivElement>(null);
-  const html5QrCodeRef = useRef<unknown>(null);
+  const [scannerStatus, setScannerStatus] = useState('');
+  const [usbMode, setUsbMode] = useState(false);
+  const [usbInput, setUsbInput] = useState('');
+  const [usbFeedback, setUsbFeedback] = useState<'added' | 'duplicate' | 'notfound' | ''>('');
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const zxingControlsRef = useRef<{ stop: () => void } | null>(null);
+  const animFrameRef = useRef<number | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const usbInputRef = useRef<HTMLInputElement>(null);
 
   // Load items from master-produk if redirected
   useEffect(() => {
@@ -78,51 +85,157 @@ export default function CekStokPage() {
     }
   }, [searchParams, storeId]);
 
-  // Init barcode scanner
+  // Init barcode scanner — crop frame ke area kotak biru → decode via ZXing MultiFormatReader
   useEffect(() => {
-    if (!scanMode || !scannerRef.current) return;
+    if (!scanMode) return;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let scanner: any = null;
+    let stopped = false;
 
     async function initScanner() {
       try {
-        const { Html5Qrcode } = await import('html5-qrcode');
-        const html5QrCode = new Html5Qrcode('scanner-container');
-        html5QrCodeRef.current = html5QrCode;
-        scanner = html5QrCode;
-
-        await html5QrCode.start(
-          { facingMode: 'environment' },
-          { fps: 10, qrbox: { width: 250, height: 100 } },
-          (decodedText: string) => {
-            handleBarcodeScanned(decodedText);
-          },
-          () => { /* ignore errors during scanning */ }
-        );
+        console.log('[Scanner] ===== initScanner =====');
         setScannerError('');
+        setScannerStatus('Meminta izin kamera...');
+
+        // STEP 1: Minta stream kamera belakang
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+        streamRef.current = stream;
+        console.log('[Scanner] Stream kamera OK:', stream.getVideoTracks()[0]?.label);
+
+        if (stopped) { stream.getTracks().forEach(t => t.stop()); return; }
+
+        // STEP 2: Pasang stream ke video element
+        const video = videoRef.current;
+        if (!video) { console.error('[Scanner] videoRef NULL!'); return; }
+        video.srcObject = stream;
+        setScannerStatus('Menunggu kamera siap...');
+
+        // STEP 3: Tunggu video benar-benar playing
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Video timeout 8 detik')), 8000);
+          const done = () => { clearTimeout(timeout); resolve(); };
+          if (video.readyState >= 3) { done(); return; }
+          video.addEventListener('playing', done, { once: true });
+          video.play().catch(reject);
+        });
+
+        if (stopped) return;
+        console.log('[Scanner] Video playing! Dimensi:', video.videoWidth, 'x', video.videoHeight);
+
+        // STEP 4: Import ZXing low-level API (decode dari canvas)
+        const { HTMLCanvasElementLuminanceSource } = await import('@zxing/browser');
+        const { BinaryBitmap, HybridBinarizer, DecodeHintType, BarcodeFormat, MultiFormatReader } = await import('@zxing/library');
+
+        const hints = new Map();
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+          BarcodeFormat.EAN_13,
+          BarcodeFormat.EAN_8,
+          BarcodeFormat.UPC_A,
+          BarcodeFormat.UPC_E,
+          BarcodeFormat.CODE_128,
+          BarcodeFormat.CODE_39,
+          BarcodeFormat.QR_CODE,
+        ]);
+        hints.set(DecodeHintType.TRY_HARDER, true);
+
+        const reader = new MultiFormatReader();
+        reader.setHints(hints);
+        console.log('[Scanner] MultiFormatReader siap (EAN-13, EAN-8, UPC, CODE-128, CODE-39, QR)');
+
+        // STEP 5: Buat canvas offscreen untuk crop frame
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+
+        setScannerStatus('Kamera aktif · Arahkan barcode ke kotak biru...');
+        console.log('[Scanner] Scan loop dimulai (crop area = 75% lebar × 35% tinggi, tengah video)');
+
+        let frameCount = 0;
+        let lastValue = '';
+        let lastTime = 0;
+
+        const scanLoop = () => {
+          if (stopped) return;
+          frameCount++;
+
+          try {
+            if (video.readyState >= 2 && video.videoWidth > 0) {
+              // Crop hanya area kotak biru: 75% lebar, 35% tinggi, posisi tengah
+              const vw = video.videoWidth;
+              const vh = video.videoHeight;
+              const cropW = Math.floor(vw * 0.75);
+              const cropH = Math.floor(vh * 0.35);
+              const cropX = Math.floor((vw - cropW) / 2);
+              const cropY = Math.floor((vh - cropH) / 2);
+
+              canvas.width = cropW;
+              canvas.height = cropH;
+              ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+              if (frameCount % 60 === 0) {
+                console.log(`[Scanner] Frame #${frameCount} | crop: ${cropW}×${cropH} dari ${vw}×${vh}`);
+              }
+
+              try {
+                // Decode dari canvas yang sudah di-crop
+                const luminance = new HTMLCanvasElementLuminanceSource(canvas);
+                const bitmap = new BinaryBitmap(new HybridBinarizer(luminance));
+                const result = reader.decode(bitmap);
+
+                const value = result.getText();
+                const now = Date.now();
+                // Debounce: barcode sama tidak trigger ulang dalam 2 detik
+                if (value !== lastValue || now - lastTime > 2000) {
+                  lastValue = value;
+                  lastTime = now;
+                  console.log(`[Scanner] ✅ TERDETEKSI! Format: ${result.getBarcodeFormat()} | Nilai: "${value}"`);
+                  handleBarcodeScanned(value);
+                }
+              } catch {
+                // NotFoundException per frame = normal, tidak ada barcode di crop area
+              }
+            }
+          } catch (err) {
+            console.warn('[Scanner] Frame error:', err);
+          }
+
+          animFrameRef.current = requestAnimationFrame(scanLoop);
+        };
+
+        animFrameRef.current = requestAnimationFrame(scanLoop);
+
       } catch (err) {
-        setScannerError(
-          'Tidak bisa mengakses kamera. Pastikan izin kamera diberikan atau gunakan pencarian manual.'
-        );
-        console.error('Scanner error:', err);
+        if (!stopped) {
+          console.error('[Scanner] ❌ Error fatal:', err);
+          setScannerStatus('');
+          setScannerError(
+            'Tidak bisa mengakses kamera. Pastikan izin kamera diberikan atau gunakan pencarian manual.'
+          );
+        }
       }
     }
 
     initScanner();
 
+    const videoEl = videoRef.current;
     return () => {
-      if (scanner) {
-        scanner.stop().catch(() => {});
-        scanner.clear().catch(() => {});
-      }
+      stopped = true;
+      console.log('[Scanner] Cleanup');
+      if (animFrameRef.current) { cancelAnimationFrame(animFrameRef.current); animFrameRef.current = null; }
+      if (zxingControlsRef.current) { zxingControlsRef.current.stop(); zxingControlsRef.current = null; }
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+      if (videoEl) videoEl.srcObject = null;
+      setScannerStatus('');
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanMode]);
 
-  const handleBarcodeScanned = useCallback(async (barcode: string) => {
-    // Check if already in list
-    if (items.find((i) => i.barcode === barcode)) return;
+  // Shared function: fetch produk dari Supabase dan tambahkan ke list
+  // Return: 'added' | 'duplicate' | 'notfound'
+  const fetchAndAddProduct = useCallback(async (barcode: string): Promise<'added' | 'duplicate' | 'notfound'> => {
+    if (items.find((i) => i.barcode === barcode)) return 'duplicate';
 
     const { data } = await supabase
       .from('store_products')
@@ -138,40 +251,68 @@ export default function CekStokPage() {
       .eq('is_deleted', false)
       .single();
 
-    if (data) {
-      const stock = Array.isArray(data.stock) ? data.stock[0] : data.stock;
-      const cat = Array.isArray(data.category) ? data.category[0] : data.category;
-      const brand = Array.isArray(data.brand) ? data.brand[0] : data.brand;
-      const sup = Array.isArray(data.supplier) ? data.supplier[0] : data.supplier;
+    if (!data) return 'notfound';
 
-      const currentQty = stock?.current_qty || 0;
-      const maxQty = stock?.max_qty || 0;
-      const minQty = stock?.min_qty || 0;
+    const stock = Array.isArray(data.stock) ? data.stock[0] : data.stock;
+    const cat = Array.isArray(data.category) ? data.category[0] : data.category;
+    const brand = Array.isArray(data.brand) ? data.brand[0] : data.brand;
+    const sup = Array.isArray(data.supplier) ? data.supplier[0] : data.supplier;
 
-      const newItem: CekStokItem = {
-        id: crypto.randomUUID(),
-        store_product_id: data.id,
-        barcode: data.barcode,
-        name: data.name,
-        unit: data.unit,
-        stokSistem: currentQty,
-        stokFisik: currentQty,
-        selisih: 0,
-        hpp: data.hpp,
-        sellPrice: data.sell_price,
-        supplier: sup?.name || '-',
-        supplier_id: sup?.id || null,
-        kategori: cat?.name || '-',
-        merek: brand?.name || '-',
-        rak: data.shelf_location || '-',
-        maxQty,
-        minQty,
-        suggestedOrder: Math.max(0, maxQty - currentQty),
-      };
-      setItems((prev) => [newItem, ...prev]);
-    }
+    const currentQty = stock?.current_qty || 0;
+    const maxQty = stock?.max_qty || 0;
+    const minQty = stock?.min_qty || 0;
+
+    const newItem: CekStokItem = {
+      id: crypto.randomUUID(),
+      store_product_id: data.id,
+      barcode: data.barcode,
+      name: data.name,
+      unit: data.unit,
+      stokSistem: currentQty,
+      stokFisik: currentQty,
+      selisih: 0,
+      hpp: data.hpp,
+      sellPrice: data.sell_price,
+      supplier: sup?.name || '-',
+      supplier_id: sup?.id || null,
+      kategori: cat?.name || '-',
+      merek: brand?.name || '-',
+      rak: data.shelf_location || '-',
+      maxQty,
+      minQty,
+      suggestedOrder: Math.max(0, maxQty - currentQty),
+    };
+    setItems((prev) => [newItem, ...prev]);
+    return 'added';
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, storeId]);
+
+  // Dipanggil oleh scanner kamera — tidak perlu feedback visual
+  const handleBarcodeScanned = useCallback(async (barcode: string) => {
+    await fetchAndAddProduct(barcode);
+  }, [fetchAndAddProduct]);
+
+  // Auto-focus input USB saat mode aktif
+  useEffect(() => {
+    if (usbMode) {
+      const t = setTimeout(() => usbInputRef.current?.focus(), 100);
+      return () => clearTimeout(t);
+    }
+  }, [usbMode]);
+
+  // Dipanggil oleh scanner USB — dengan feedback visual
+  const handleUsbKeyDown = useCallback(async (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return;
+    const barcode = usbInput.trim();
+    if (barcode.length < 6) return;
+
+    setUsbInput('');
+    const result = await fetchAndAddProduct(barcode);
+    setUsbFeedback(result);
+    setTimeout(() => setUsbFeedback(''), 2500);
+    // Kembalikan fokus ke input agar scanner berikutnya langsung masuk
+    usbInputRef.current?.focus();
+  }, [usbInput, fetchAndAddProduct]);
 
   const handleSearchProducts = async (query: string) => {
     if (query.length < 2) { setSearchResults([]); return; }
@@ -317,7 +458,7 @@ export default function CekStokPage() {
       {/* Actions */}
       <div className="flex gap-2 flex-wrap">
         <button
-          onClick={() => setScanMode(!scanMode)}
+          onClick={() => { setScanMode(!scanMode); setUsbMode(false); }}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
             scanMode
               ? 'bg-blue-600 text-white'
@@ -325,7 +466,19 @@ export default function CekStokPage() {
           }`}
         >
           <ScanLine className="w-4 h-4" />
-          {scanMode ? 'Tutup Scanner' : 'Scan Barcode'}
+          {scanMode ? 'Tutup Kamera' : 'Kamera'}
+        </button>
+
+        <button
+          onClick={() => { setUsbMode(!usbMode); setScanMode(false); }}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+            usbMode
+              ? 'bg-green-600 text-white'
+              : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          <Keyboard className="w-4 h-4" />
+          {usbMode ? 'Tutup USB' : 'Scanner USB'}
         </button>
 
         <div className="relative flex-1 min-w-[200px]">
@@ -374,7 +527,58 @@ export default function CekStokPage() {
         </div>
       </div>
 
-      {/* Scanner */}
+      {/* USB Scanner Input */}
+      {usbMode && (
+        <div className="card">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-9 h-9 bg-green-100 rounded-lg flex items-center justify-center flex-shrink-0">
+              <Keyboard className="w-5 h-5 text-green-600" />
+            </div>
+            <div>
+              <p className="font-medium text-sm text-gray-800">Mode Scanner USB</p>
+              <p className="text-xs text-gray-400">
+                Tembakkan scanner ke barcode — otomatis terdeteksi. Atau ketik barcode lalu tekan Enter.
+              </p>
+            </div>
+          </div>
+
+          <input
+            ref={usbInputRef}
+            type="text"
+            value={usbInput}
+            onChange={(e) => setUsbInput(e.target.value)}
+            onKeyDown={handleUsbKeyDown}
+            placeholder="Scan barcode di sini..."
+            className={`w-full px-4 py-3 border-2 rounded-lg font-mono text-lg tracking-widest text-center transition-colors focus:outline-none ${
+              usbFeedback === 'added'
+                ? 'border-green-400 bg-green-50 text-green-800'
+                : usbFeedback === 'notfound'
+                ? 'border-red-400 bg-red-50 text-red-800'
+                : usbFeedback === 'duplicate'
+                ? 'border-yellow-400 bg-yellow-50 text-yellow-800'
+                : 'border-gray-300 focus:border-green-400'
+            }`}
+            autoComplete="off"
+          />
+
+          <div className="mt-2 h-5 text-center text-sm font-medium">
+            {usbFeedback === 'added' && (
+              <span className="text-green-600">✓ Produk berhasil ditambahkan</span>
+            )}
+            {usbFeedback === 'notfound' && (
+              <span className="text-red-600">✗ Barcode tidak ditemukan di database</span>
+            )}
+            {usbFeedback === 'duplicate' && (
+              <span className="text-yellow-600">⚠ Produk sudah ada di daftar</span>
+            )}
+            {!usbFeedback && (
+              <span className="text-gray-400 text-xs">Tekan Enter setelah mengetik · Scanner USB otomatis kirim Enter</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Scanner Kamera */}
       {scanMode && (
         <div className="card">
           {scannerError ? (
@@ -382,7 +586,29 @@ export default function CekStokPage() {
               {scannerError}
             </div>
           ) : (
-            <div ref={scannerRef} id="scanner-container" className="rounded-lg overflow-hidden max-w-md mx-auto" />
+            <div className="max-w-md mx-auto">
+              <div className="relative rounded-lg overflow-hidden bg-black">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full"
+                  style={{ maxHeight: '280px', objectFit: 'cover' }}
+                />
+                {/* Garis panduan scan */}
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="border-2 border-blue-400 rounded" style={{ width: '75%', height: '30%' }} />
+                </div>
+              </div>
+              {/* Status scanner — tampil di layar & di console */}
+              {scannerStatus && (
+                <p className="text-xs text-center text-blue-600 mt-2 font-medium">{scannerStatus}</p>
+              )}
+              <p className="text-xs text-center text-gray-400 mt-1">
+                Arahkan barcode ke dalam kotak · EAN-13, CODE-128, QR Code
+              </p>
+            </div>
           )}
         </div>
       )}

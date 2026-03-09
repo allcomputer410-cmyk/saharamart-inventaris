@@ -10,6 +10,9 @@ import {
   BarChart3,
   Loader2,
   Package,
+  Download,
+  FileSpreadsheet,
+  FileText,
 } from 'lucide-react';
 import { formatRupiah, formatQty } from '@/lib/utils';
 
@@ -28,6 +31,7 @@ interface ProductTrend {
   categoryName: string;
 }
 
+// ─── Main Page ────────────────────────────────────────────────────────────────
 export default function TrendPage() {
   const params = useParams();
   const storeId = params.id as string;
@@ -36,6 +40,8 @@ export default function TrendPage() {
   const [loading, setLoading] = useState(true);
   const [products, setProducts] = useState<ProductTrend[]>([]);
   const [daysRange, setDaysRange] = useState(30);
+  const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null);
+  const [showExportMenu, setShowExportMenu] = useState(false);
 
   useEffect(() => {
     async function fetchTrend() {
@@ -45,7 +51,6 @@ export default function TrendPage() {
       sinceDate.setDate(sinceDate.getDate() - daysRange);
       const sinceDateStr = sinceDate.toISOString().split('T')[0];
 
-      // Get all store products with stock and category
       const { data: storeProducts } = await supabase
         .from('store_products')
         .select(`
@@ -57,7 +62,6 @@ export default function TrendPage() {
         .eq('is_deleted', false)
         .eq('is_active', true);
 
-      // Get daily_sales in range
       const { data: dailySales } = await supabase
         .from('daily_sales')
         .select('id')
@@ -66,7 +70,6 @@ export default function TrendPage() {
 
       const dailySaleIds = (dailySales || []).map(d => d.id);
 
-      // Get sale items for those days
       const saleItemsMap = new Map<string, { totalSold: number; totalRevenue: number }>();
       if (dailySaleIds.length > 0) {
         const { data: saleItems } = await supabase
@@ -82,7 +85,6 @@ export default function TrendPage() {
         }
       }
 
-      // Build product trends
       const trends: ProductTrend[] = (storeProducts || []).map((sp) => {
         const stockArr = Array.isArray(sp.stock) ? sp.stock : sp.stock ? [sp.stock] : [];
         const currentQty = stockArr[0]?.current_qty || 0;
@@ -133,6 +135,132 @@ export default function TrendPage() {
 
   const filtered = getFilteredProducts();
 
+  const tabLabels: Record<TabType, string> = {
+    fast: 'Fast Moving',
+    slow: 'Slow Moving',
+    dead: 'Dead Stock',
+    prediction: 'Prediksi Reorder',
+  };
+
+  // ─── Export Excel ──────────────────────────────────────────────────────────
+  async function exportExcel() {
+    setExporting('excel');
+    setShowExportMenu(false);
+    try {
+      const XLSX = await import('xlsx');
+      const rows = filtered.map((p, idx) => ({
+        'No': idx + 1,
+        'Barcode': p.barcode,
+        'Nama Produk': p.name,
+        'Kategori': p.categoryName,
+        'Satuan': p.unit,
+        'Stok Saat Ini': p.currentQty,
+        'Total Terjual': p.totalSold,
+        'Avg/Hari': parseFloat(p.avgDailySold.toFixed(2)),
+        'Revenue (Rp)': p.totalRevenue,
+        'Sisa Hari': p.daysOfStock !== null ? Math.round(p.daysOfStock) : '',
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws['!cols'] = [
+        { wch: 4 }, { wch: 14 }, { wch: 35 }, { wch: 14 },
+        { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 10 },
+        { wch: 16 }, { wch: 10 },
+      ];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, tabLabels[activeTab]);
+      XLSX.writeFile(wb, `trend-${activeTab}-${daysRange}hari.xlsx`);
+    } finally {
+      setExporting(null);
+    }
+  }
+
+  // ─── Export PDF ────────────────────────────────────────────────────────────
+  async function exportPDF() {
+    setExporting('pdf');
+    setShowExportMenu(false);
+    try {
+      const { pdf, Document, Page, Text, View, StyleSheet } = await import('@react-pdf/renderer');
+
+      const s = StyleSheet.create({
+        page:        { padding: 24, fontSize: 8, fontFamily: 'Helvetica' },
+        title:       { fontSize: 13, fontWeight: 'bold', marginBottom: 4 },
+        subtitle:    { fontSize: 9, color: '#6b7280', marginBottom: 12 },
+        tableHeader: { flexDirection: 'row', backgroundColor: '#f3f4f6', borderBottom: '1pt solid #e5e7eb', paddingVertical: 5, paddingHorizontal: 4 },
+        tableRow:    { flexDirection: 'row', borderBottom: '0.5pt solid #f3f4f6', paddingVertical: 4, paddingHorizontal: 4 },
+        col0: { width: '4%',  textAlign: 'right' },
+        col1: { width: '30%' },
+        col2: { width: '15%' },
+        col3: { width: '12%', textAlign: 'right' },
+        col4: { width: '12%', textAlign: 'right' },
+        col5: { width: '12%', textAlign: 'right' },
+        col6: { width: '15%', textAlign: 'right' },
+        bold:   { fontWeight: 'bold', fontSize: 8 },
+        footer: { marginTop: 16, fontSize: 7, color: '#9ca3af', textAlign: 'right' },
+      });
+
+      const tabLabel  = tabLabels[activeTab];
+      const showSales = tabLabel !== 'Dead Stock';
+      const showDays  = tabLabel === 'Prediksi Reorder';
+      const now = new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
+      const rupiah = (v: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
+
+      const doc = (
+        <Document>
+          <Page size="A4" orientation="landscape" style={s.page}>
+            <Text style={s.title}>Trend & Analisis — {tabLabel}</Text>
+            <Text style={s.subtitle}>Periode {daysRange} hari · Dicetak {now} · {filtered.length} produk</Text>
+
+            <View style={s.tableHeader}>
+              <Text style={[s.col0, s.bold]}>#</Text>
+              <Text style={[s.col1, s.bold]}>Produk</Text>
+              <Text style={[s.col2, s.bold]}>Kategori</Text>
+              <Text style={[s.col3, s.bold]}>Stok</Text>
+              {showSales && <><Text style={[s.col4, s.bold]}>Terjual</Text><Text style={[s.col5, s.bold]}>Avg/Hr</Text><Text style={[s.col6, s.bold]}>Revenue</Text></>}
+              {showDays  && <Text style={[s.col6, s.bold]}>Sisa Hari</Text>}
+            </View>
+
+            {filtered.map((p, idx) => (
+              <View key={p.id} style={[s.tableRow, { backgroundColor: idx % 2 === 0 ? '#ffffff' : '#f9fafb' }]}>
+                <Text style={s.col0}>{idx + 1}</Text>
+                <View style={s.col1}>
+                  <Text>{p.name.slice(0, 38)}</Text>
+                  <Text style={{ fontSize: 6, color: '#9ca3af' }}>{p.barcode}</Text>
+                </View>
+                <Text style={s.col2}>{p.categoryName}</Text>
+                <Text style={s.col3}>{p.currentQty.toFixed(0)} {p.unit}</Text>
+                {showSales && (
+                  <>
+                    <Text style={s.col4}>{p.totalSold.toFixed(0)}</Text>
+                    <Text style={s.col5}>{p.avgDailySold.toFixed(1)}</Text>
+                    <Text style={s.col6}>{rupiah(p.totalRevenue)}</Text>
+                  </>
+                )}
+                {showDays && (
+                  <Text style={[s.col6, { color: (p.daysOfStock || 0) <= 7 ? '#dc2626' : (p.daysOfStock || 0) <= 14 ? '#d97706' : '#16a34a' }]}>
+                    {p.daysOfStock !== null ? Math.round(p.daysOfStock) + ' hari' : '-'}
+                  </Text>
+                )}
+              </View>
+            ))}
+
+            <Text style={s.footer}>SAHARAMART — Sistem Manajemen Inventaris</Text>
+          </Page>
+        </Document>
+      );
+
+      const blob = await pdf(doc).toBlob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `trend-${activeTab}-${daysRange}hari.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(null);
+    }
+  }
+
   // Category breakdown for current tab
   const categoryBreakdown = new Map<string, { count: number; totalSold: number; totalRevenue: number }>();
   for (const p of filtered) {
@@ -153,24 +281,62 @@ export default function TrendPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <div>
           <h1 className="text-xl font-bold text-gray-800">Trend & Analisis</h1>
           <p className="text-sm text-gray-500 mt-1">
             Analisis pergerakan stok dan prediksi kebutuhan
           </p>
         </div>
-        <select
-          value={daysRange}
-          onChange={(e) => setDaysRange(parseInt(e.target.value))}
-          className="input-field w-auto text-sm"
-        >
-          <option value={7}>7 hari</option>
-          <option value={14}>14 hari</option>
-          <option value={30}>30 hari</option>
-          <option value={60}>60 hari</option>
-          <option value={90}>90 hari</option>
-        </select>
+        <div className="flex items-center gap-2">
+          {/* Export Button */}
+          {!loading && filtered.length > 0 && (
+            <div className="relative">
+              <button
+                onClick={() => setShowExportMenu(v => !v)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-50 transition-colors"
+              >
+                {exporting ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Download className="w-3.5 h-3.5" />
+                )}
+                Export
+              </button>
+              {showExportMenu && (
+                <div className="absolute right-0 top-9 bg-white border border-gray-200 rounded-lg shadow-lg z-10 min-w-[140px]">
+                  <button
+                    onClick={exportExcel}
+                    className="flex items-center gap-2 w-full px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 rounded-t-lg"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-green-600" />
+                    Excel (.xlsx)
+                  </button>
+                  <button
+                    onClick={exportPDF}
+                    className="flex items-center gap-2 w-full px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 rounded-b-lg border-t border-gray-100"
+                  >
+                    <FileText className="w-4 h-4 text-red-500" />
+                    PDF
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Days Range */}
+          <select
+            value={daysRange}
+            onChange={(e) => setDaysRange(parseInt(e.target.value))}
+            className="input-field w-auto text-sm"
+          >
+            <option value={7}>7 hari</option>
+            <option value={14}>14 hari</option>
+            <option value={30}>30 hari</option>
+            <option value={60}>60 hari</option>
+            <option value={90}>90 hari</option>
+          </select>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -311,7 +477,7 @@ export default function TrendPage() {
               </div>
               {filtered.length > 50 && (
                 <div className="text-center py-2 text-xs text-gray-400 bg-gray-50">
-                  Menampilkan 50 dari {filtered.length} produk
+                  Menampilkan 50 dari {filtered.length} produk · Export untuk melihat semua
                 </div>
               )}
             </div>
