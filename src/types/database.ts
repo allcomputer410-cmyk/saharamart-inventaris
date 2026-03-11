@@ -25,6 +25,9 @@ export interface Store {
   ipos_db_port?: number;
   ipos_db_name?: string;
   is_active: boolean;
+  feature_promo: boolean;
+  feature_gudang: boolean;
+  feature_roles: boolean;
   created_at: string;
 }
 
