@@ -67,8 +67,24 @@ interface NavItem {
   allowedRoles?: string[]; // jika diisi, hanya role ini yang bisa akses
 }
 
-export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole = '', userName = '', featurePromo = false, featureGudang = false }: SidebarProps) {
+export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole = '', userName = '', featurePromo = false, featureGudang = false, featureRoles = false }: SidebarProps) {
   const pathname = usePathname();
+
+  // Role-based menu visibility
+  // Jika featureRoles = false: tampilkan semua (bypass semua role check)
+  // Jika featureRoles = true:
+  //   supervisor: sembunyikan Analisis Keuangan, Rekap Kasir
+  //   admin_gudang: sembunyikan Pesanan, Pembelian Masuk, Rekap, Analisis, Rekap Kasir
+  const isHidden = (menuLabel: string): boolean => {
+    if (!featureRoles) return false;
+    if (userRole === 'supervisor') {
+      return ['Analisis Keuangan', 'Rekap Kasir'].includes(menuLabel);
+    }
+    if (userRole === 'admin_gudang') {
+      return ['Pesanan', 'Pembelian Masuk', 'Rekap Supplier', 'Analisis Keuangan', 'Rekap Kasir', 'Penjualan', 'Trend & Analisis'].includes(menuLabel);
+    }
+    return false;
+  };
 
   const storeNavItems: NavItem[] = [
     { label: 'Dashboard', href: `/toko/${storeId}/dashboard`, icon: LayoutDashboard },
@@ -107,7 +123,7 @@ export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole 
 
   const globalNavItems: NavItem[] = [
     { label: 'Dashboard Global', href: '/dashboard', icon: LayoutDashboard },
-    { label: 'Manajemen User', href: '/users', icon: Users, disabled: true, badge: 'Segera' },
+    { label: 'Manajemen User', href: '/admin/users', icon: Users },
     { label: 'Sync Monitor', href: '/sync', icon: RefreshCw },
     { label: 'Audit Log', href: '/audit', icon: Shield },
   ];
@@ -176,6 +192,8 @@ export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole 
               </p>
             </div>
             {storeNavItems.map((item) => {
+              // Sembunyikan menu berdasar role enforcement
+              if (isHidden(item.label)) return null;
               const isActive = pathname === item.href;
               const Icon = item.icon;
               // Cek apakah item punya pembatasan role
