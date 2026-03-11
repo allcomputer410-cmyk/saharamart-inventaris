@@ -60,6 +60,9 @@ export default function StoreLayout({
           onClose={() => setSidebarOpen(false)}
           userRole={userRole}
           userName={userName}
+          featurePromo={store?.feature_promo ?? false}
+          featureGudang={store?.feature_gudang ?? false}
+          featureRoles={store?.feature_roles ?? false}
         />
       )}
 

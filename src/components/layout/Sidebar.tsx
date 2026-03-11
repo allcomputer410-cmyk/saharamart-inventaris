@@ -26,6 +26,9 @@ import {
   ShoppingBag,
   Receipt,
   LineChart,
+  ArrowLeftRight,
+  ClipboardList,
+  RotateCcw,
 } from 'lucide-react';
 
 // Role yang boleh akses menu bertanda restricted
@@ -50,6 +53,9 @@ interface SidebarProps {
   onClose: () => void;
   userRole?: string;
   userName?: string;
+  featurePromo?: boolean;
+  featureGudang?: boolean;
+  featureRoles?: boolean;
 }
 
 interface NavItem {
@@ -61,7 +67,7 @@ interface NavItem {
   allowedRoles?: string[]; // jika diisi, hanya role ini yang bisa akses
 }
 
-export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole = '', userName = '' }: SidebarProps) {
+export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole = '', userName = '', featurePromo = false, featureGudang = false }: SidebarProps) {
   const pathname = usePathname();
 
   const storeNavItems: NavItem[] = [
@@ -92,7 +98,9 @@ export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole 
       icon: LineChart,
       allowedRoles: PENJUALAN_ROLES,
     },
-    { label: 'Promo', href: `/toko/${storeId}/promo`, icon: Tag, disabled: true, badge: 'Segera' },
+    featurePromo
+      ? { label: 'Promo', href: `/toko/${storeId}/promo`, icon: Tag }
+      : { label: 'Promo', href: `/toko/${storeId}/promo`, icon: Tag, disabled: true, badge: 'Nonaktif' },
     { label: 'Pengaturan', href: `/toko/${storeId}/settings`, icon: Settings },
     { label: 'Panduan', href: `/toko/${storeId}/panduan`, icon: HelpCircle },
   ];
@@ -207,6 +215,42 @@ export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole 
                 </Link>
               );
             })}
+
+            {/* Gudang Section — hanya tampil jika feature_gudang aktif */}
+            {featureGudang && (
+              <>
+                <div className="mx-4 my-3 border-t border-slate-700" />
+                <div className="px-3 mb-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 px-3 py-2">
+                    Gudang
+                  </p>
+                </div>
+                {[
+                  { label: 'Transfer Stok', href: `/toko/${storeId}/gudang/transfer`, icon: ArrowLeftRight },
+                  { label: 'Stok Opname', href: `/toko/${storeId}/gudang/opname`, icon: ClipboardList },
+                  { label: 'Retur Supplier', href: `/toko/${storeId}/gudang/retur`, icon: RotateCcw },
+                ].map((item) => {
+                  const isActive = pathname === item.href || pathname.startsWith(item.href);
+                  const Icon = item.icon;
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      onClick={onClose}
+                      className={cn(
+                        'flex items-center gap-3 mx-2 px-3 py-2.5 rounded-lg text-sm transition-colors',
+                        isActive
+                          ? 'bg-blue-600 text-white font-medium'
+                          : 'text-slate-300 hover:bg-slate-700 hover:text-white'
+                      )}
+                    >
+                      <Icon className="w-5 h-5 shrink-0" />
+                      <span className="truncate">{item.label}</span>
+                    </Link>
+                  );
+                })}
+              </>
+            )}
 
             {/* Divider */}
             <div className="mx-4 my-3 border-t border-slate-700" />

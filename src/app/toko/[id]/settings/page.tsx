@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { Save, Loader2 } from 'lucide-react';
+import { Save, Loader2, ToggleLeft, ToggleRight } from 'lucide-react';
 import type { Store } from '@/types/database';
 
 export default function SettingsPage() {
@@ -44,6 +44,9 @@ export default function SettingsPage() {
         ipos_db_host: store.ipos_db_host,
         ipos_db_port: store.ipos_db_port,
         ipos_db_name: store.ipos_db_name,
+        feature_promo: store.feature_promo ?? false,
+        feature_gudang: store.feature_gudang ?? false,
+        feature_roles: store.feature_roles ?? false,
       })
       .eq('id', storeId);
 
@@ -179,6 +182,95 @@ export default function SettingsPage() {
             placeholder="i4_tes"
             className="input-field"
           />
+        </div>
+      </div>
+
+      {/* Feature Toggles */}
+      <div className="card space-y-4">
+        <h3 className="font-semibold text-gray-800">Fitur Tambahan</h3>
+        <p className="text-sm text-gray-500">
+          Aktifkan modul tambahan sesuai kebutuhan toko
+        </p>
+
+        {/* Promo Toggle */}
+        <div className="flex items-center justify-between py-3 border-b border-gray-100">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Promo &amp; Diskon</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              5 tipe promo: Discount, Bundle, Buy X Get Y, Min Purchase, Flash Sale
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setStore({ ...store, feature_promo: !store.feature_promo })}
+            className="flex items-center gap-2 text-sm font-medium transition-colors"
+          >
+            {store.feature_promo ? (
+              <>
+                <ToggleRight className="w-8 h-8 text-blue-600" />
+                <span className="text-blue-600">Aktif</span>
+              </>
+            ) : (
+              <>
+                <ToggleLeft className="w-8 h-8 text-gray-400" />
+                <span className="text-gray-400">Nonaktif</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Gudang Toggle */}
+        <div className="flex items-center justify-between py-3 border-b border-gray-100">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Modul Gudang</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Transfer stok antar toko, stok opname, retur supplier
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setStore({ ...store, feature_gudang: !store.feature_gudang })}
+            className="flex items-center gap-2 text-sm font-medium transition-colors"
+          >
+            {store.feature_gudang ? (
+              <>
+                <ToggleRight className="w-8 h-8 text-blue-600" />
+                <span className="text-blue-600">Aktif</span>
+              </>
+            ) : (
+              <>
+                <ToggleLeft className="w-8 h-8 text-gray-400" />
+                <span className="text-gray-400">Nonaktif</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Role Enforcement Toggle */}
+        <div className="flex items-center justify-between py-3">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Role Enforcement</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Batasi akses menu berdasarkan role (direktur, GM, supervisor, admin gudang)
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setStore({ ...store, feature_roles: !store.feature_roles })}
+            className="flex items-center gap-2 text-sm font-medium transition-colors"
+          >
+            {store.feature_roles ? (
+              <>
+                <ToggleRight className="w-8 h-8 text-blue-600" />
+                <span className="text-blue-600">Aktif</span>
+              </>
+            ) : (
+              <>
+                <ToggleLeft className="w-8 h-8 text-gray-400" />
+                <span className="text-gray-400">Nonaktif</span>
+              </>
+            )}
+          </button>
         </div>
       </div>
 
