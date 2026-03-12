@@ -11,6 +11,7 @@ import {
   TrendingUp,
   Loader2,
   ShoppingCart,
+  Lightbulb,
 } from 'lucide-react';
 import { formatRupiah } from '@/lib/utils';
 import {
@@ -32,6 +33,7 @@ interface StoreStats {
   criticalStock: number;
   activeOrders: number;
   todaySales: number;
+  urgentPromos: number;
 }
 
 export default function GlobalDashboardPage() {
@@ -58,7 +60,7 @@ export default function GlobalDashboardPage() {
 
       for (const store of stores) {
         // Parallel queries per store
-        const [productsRes, criticalRes, ordersRes, salesRes] = await Promise.all([
+        const [productsRes, criticalRes, ordersRes, salesRes, urgentPromosRes] = await Promise.all([
           supabase
             .from('store_products')
             .select('id', { count: 'exact', head: true })
@@ -79,6 +81,12 @@ export default function GlobalDashboardPage() {
             .eq('store_id', store.id)
             .eq('sale_date', today)
             .single(),
+          supabase
+            .from('promo_recommendations')
+            .select('id', { count: 'exact', head: true })
+            .eq('store_id', store.id)
+            .eq('status', 'pending')
+            .eq('priority', 'urgent'),
         ]);
 
         const criticalCount = (criticalRes.data || []).filter(
@@ -93,6 +101,7 @@ export default function GlobalDashboardPage() {
           criticalStock: criticalCount,
           activeOrders: ordersRes.count || 0,
           todaySales: salesRes.data?.total_revenue || 0,
+          urgentPromos: urgentPromosRes.count || 0,
         });
       }
 
@@ -199,6 +208,46 @@ export default function GlobalDashboardPage() {
               </div>
             </div>
           )}
+
+          {/* Promo Alert Section */}
+          <div className="card">
+            <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+              <Lightbulb className="w-4 h-4 text-purple-600" />
+              Alert Rekomendasi Promo
+            </h3>
+            {storeStats.every((s) => s.urgentPromos === 0) ? (
+              <p className="text-sm text-green-600 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
+                Semua toko OK, tidak ada rekomendasi urgent
+              </p>
+            ) : (
+              <div className="divide-y divide-gray-100">
+                {storeStats.map((store) => (
+                  <div key={store.storeId} className="flex items-center justify-between py-2 gap-3">
+                    <div className="flex items-center gap-2">
+                      <StoreIcon className="w-4 h-4 text-gray-400 shrink-0" />
+                      <span className="text-sm text-gray-700">{store.storeName}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {store.urgentPromos > 0 ? (
+                        <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-0.5 rounded-full">
+                          {store.urgentPromos} produk urgent
+                        </span>
+                      ) : (
+                        <span className="text-xs text-green-600">OK</span>
+                      )}
+                      <a
+                        href={`/toko/${store.storeId}/rekomendasi-promo`}
+                        className="text-xs text-purple-600 hover:underline whitespace-nowrap"
+                      >
+                        Lihat →
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Per-Store Cards */}
           <div>

@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/promo-intelligence/analyze",
+      "schedule": "0 19 * * *"
+    }
+  ]
+}

@@ -29,6 +29,7 @@ import {
   ArrowLeftRight,
   ClipboardList,
   RotateCcw,
+  Lightbulb,
 } from 'lucide-react';
 
 // Role yang boleh akses menu bertanda restricted
@@ -117,6 +118,9 @@ export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole 
     featurePromo
       ? { label: 'Promo', href: `/toko/${storeId}/promo`, icon: Tag }
       : { label: 'Promo', href: `/toko/${storeId}/promo`, icon: Tag, disabled: true, badge: 'Nonaktif' },
+    ...(featurePromo
+      ? [{ label: 'Rekomendasi Promo', href: `/toko/${storeId}/rekomendasi-promo`, icon: Lightbulb }]
+      : []),
     { label: 'Pengaturan', href: `/toko/${storeId}/settings`, icon: Settings },
     { label: 'Panduan', href: `/toko/${storeId}/panduan`, icon: HelpCircle },
   ];

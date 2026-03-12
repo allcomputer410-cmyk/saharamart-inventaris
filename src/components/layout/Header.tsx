@@ -35,12 +35,13 @@ interface Notification {
 }
 
 const NOTIF_STYLE: Record<string, { bg: string; dot: string }> = {
-  critical_stock: { bg: 'bg-red-50',    dot: 'bg-red-500' },
-  low_stock:      { bg: 'bg-yellow-50', dot: 'bg-yellow-500' },
-  order_received: { bg: 'bg-green-50',  dot: 'bg-green-500' },
-  sync_error:     { bg: 'bg-red-50',    dot: 'bg-red-500' },
-  sync_success:   { bg: 'bg-blue-50',   dot: 'bg-blue-500' },
-  default:        { bg: 'bg-gray-50',   dot: 'bg-gray-400' },
+  critical_stock:       { bg: 'bg-red-50',    dot: 'bg-red-500' },
+  low_stock:            { bg: 'bg-yellow-50', dot: 'bg-yellow-500' },
+  order_received:       { bg: 'bg-green-50',  dot: 'bg-green-500' },
+  sync_error:           { bg: 'bg-red-50',    dot: 'bg-red-500' },
+  sync_success:         { bg: 'bg-blue-50',   dot: 'bg-blue-500' },
+  promo_recommendation: { bg: 'bg-purple-50', dot: 'bg-purple-500' },
+  default:              { bg: 'bg-gray-50',   dot: 'bg-gray-400' },
 };
 
 export default function Header({ onMenuClick, pageTitle, userName = '', userRole = '' }: HeaderProps) {
@@ -207,6 +208,27 @@ export default function Header({ onMenuClick, pageTitle, userName = '', userRole
                       </button>
                     </div>
                   </div>
+
+                  {/* Promo Recommendation Banner */}
+                  {(() => {
+                    const promoNotifs = notifications.filter((n) => n.type === 'promo_recommendation' && !n.is_read);
+                    if (promoNotifs.length === 0) return null;
+                    return (
+                      <div className="px-4 py-2 bg-purple-50 border-b border-purple-100 flex items-center justify-between gap-2">
+                        <span className="text-xs text-purple-700 font-medium">
+                          {promoNotifs.length > 1 ? `${promoNotifs.length} notif` : ''} produk butuh perhatian promo
+                        </span>
+                        {promoNotifs[0].action_url && (
+                          <button
+                            onClick={() => { router.push(promoNotifs[0].action_url!); setShowNotifPanel(false); }}
+                            className="text-xs text-purple-600 font-semibold hover:underline whitespace-nowrap"
+                          >
+                            Lihat Rekomendasi →
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {/* List */}
                   <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
