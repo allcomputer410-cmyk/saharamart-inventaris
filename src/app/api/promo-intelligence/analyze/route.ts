@@ -48,8 +48,14 @@ interface Recommendation {
   analyzed_at: string;
 }
 
+interface AnalyzeResult {
+  count: number;
+  no_sale_data: boolean;
+  products_with_stock: number;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function analyzeStore(supabase: any, storeId: string): Promise<number> {
+async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResult> {
   const today = new Date();
   const _todayStr = today.toISOString().split('T')[0];
   const thirtyDaysAgo = new Date(today);
@@ -64,7 +70,7 @@ async function analyzeStore(supabase: any, storeId: string): Promise<number> {
     .eq('is_active', true)
     .eq('is_deleted', false);
 
-  if (!rawProducts || rawProducts.length === 0) return 0;
+  if (!rawProducts || rawProducts.length === 0) return { count: 0, no_sale_data: true, products_with_stock: 0 };
 
   // Get stock data
   const productIds = rawProducts.map((p: { id: string }) => p.id);
@@ -88,7 +94,7 @@ async function analyzeStore(supabase: any, storeId: string): Promise<number> {
     }))
     .filter((p: ProductRow) => p.current_qty > 0);
 
-  if (products.length === 0) return 0;
+  if (products.length === 0) return { count: 0, no_sale_data: true, products_with_stock: 0 };
 
   // 2. Get sales data last 30 days
   const { data: saleItems } = await supabase
@@ -134,6 +140,9 @@ async function analyzeStore(supabase: any, storeId: string): Promise<number> {
     if (totalTxn > 0) avgTransaction = totalRev / totalTxn;
   }
 
+  // Deteksi apakah ada data penjualan sama sekali
+  const noSaleData = !saleItems || saleItems.length === 0;
+
   // Store-level averages
   const totalStoreSales30 = Object.values(saleAggMap).reduce((s, a) => s + a.total_qty, 0);
   const storeAvgDailyQty = totalStoreSales30 / 30;
@@ -167,7 +176,8 @@ async function analyzeStore(supabase: any, storeId: string): Promise<number> {
 
     const agg = saleAggMap[spId];
     const lastSaleDate = agg?.last_sale_date || null;
-    let daysNoSale = 30;
+    // Jika tidak ada data penjualan sama sekali → anggap tidak terjual 31 hari (dead stock)
+    let daysNoSale = noSaleData ? 31 : 30;
     if (lastSaleDate) {
       const last = new Date(lastSaleDate);
       daysNoSale = Math.floor((today.getTime() - last.getTime()) / (1000 * 60 * 60 * 24));
@@ -175,8 +185,10 @@ async function analyzeStore(supabase: any, storeId: string): Promise<number> {
     const avgDailyQty = agg ? agg.total_qty / 30 : 0;
 
     // Determine condition
-    const isDeadStock = daysNoSale > 30;
-    const isSlowStock = !isDeadStock && avgDailyQty < avgDailyQtyPerProduct * 0.5;
+    // isDeadStock: tidak terjual > 30 hari, atau tidak ada data penjualan sama sekali
+    const isDeadStock = daysNoSale > 30 || (noSaleData && !agg);
+    // isSlowStock: terjual < 50% rata-rata (skip jika noSaleData karena avgDailyQtyPerProduct = 0)
+    const isSlowStock = !isDeadStock && !noSaleData && avgDailyQtyPerProduct > 0 && avgDailyQty < avgDailyQtyPerProduct * 0.5;
     const isHighMargin = marginPct > 35;
 
     if (!isDeadStock && !isSlowStock && !(isHighMargin && daysNoSale >= 7)) continue;
@@ -373,7 +385,7 @@ async function analyzeStore(supabase: any, storeId: string): Promise<number> {
     });
   }
 
-  if (recommendations.length === 0) return 0;
+  if (recommendations.length === 0) return { count: 0, no_sale_data: noSaleData, products_with_stock: products.length };
 
   // Clear old pending recommendations
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -401,7 +413,7 @@ async function analyzeStore(supabase: any, storeId: string): Promise<number> {
     is_read: false,
   }]);
 
-  return recommendations.length;
+  return { count: recommendations.length, no_sale_data: noSaleData, products_with_stock: products.length };
 }
 
 // POST: manual trigger or from app
@@ -411,11 +423,11 @@ export async function POST(request: NextRequest) {
     const storeId: string | undefined = body?.store_id;
 
     const supabase = getAdminClient();
-    const perStore: { store_id: string; recommendations: number }[] = [];
+    const perStore: { store_id: string; recommendations: number; no_sale_data: boolean; products_with_stock: number }[] = [];
 
     if (storeId) {
-      const count = await analyzeStore(supabase, storeId);
-      perStore.push({ store_id: storeId, recommendations: count });
+      const result = await analyzeStore(supabase, storeId);
+      perStore.push({ store_id: storeId, recommendations: result.count, no_sale_data: result.no_sale_data, products_with_stock: result.products_with_stock });
     } else {
       // Analyze all active stores
       const { data: stores } = await supabase
@@ -424,17 +436,19 @@ export async function POST(request: NextRequest) {
         .eq('is_active', true);
 
       for (const store of stores || []) {
-        const count = await analyzeStore(supabase, store.id);
-        perStore.push({ store_id: store.id, recommendations: count });
+        const result = await analyzeStore(supabase, store.id);
+        perStore.push({ store_id: store.id, recommendations: result.count, no_sale_data: result.no_sale_data, products_with_stock: result.products_with_stock });
       }
     }
 
     const totalRecommendations = perStore.reduce((s, p) => s + p.recommendations, 0);
+    const anyNoSaleData = perStore.some((p) => p.no_sale_data);
 
     return NextResponse.json({
       success: true,
       stores_analyzed: perStore.length,
       total_recommendations: totalRecommendations,
+      no_sale_data: anyNoSaleData,
       per_store: perStore,
     });
   } catch (error) {
@@ -457,8 +471,8 @@ export async function GET() {
       .eq('is_active', true);
 
     for (const store of stores || []) {
-      const count = await analyzeStore(supabase, store.id);
-      perStore.push({ store_id: store.id, recommendations: count });
+      const result = await analyzeStore(supabase, store.id);
+      perStore.push({ store_id: store.id, recommendations: result.count });
     }
 
     const totalRecommendations = perStore.reduce((s, p) => s + p.recommendations, 0);

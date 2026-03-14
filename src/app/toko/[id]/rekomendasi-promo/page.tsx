@@ -414,6 +414,7 @@ export default function RekomendasiPromoPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editParams, setEditParams] = useState<Record<string, number>>({});
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+  const [emptyReason, setEmptyReason] = useState<'no_sale_data' | 'all_normal' | null>(null);
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ msg, type });
@@ -459,7 +460,13 @@ export default function RekomendasiPromoPage() {
       });
       const data = await res.json();
       if (data.success) {
-        showToast(`Analisis selesai: ${data.total_recommendations} rekomendasi baru`);
+        if (data.total_recommendations === 0) {
+          setEmptyReason(data.no_sale_data ? 'no_sale_data' : 'all_normal');
+          showToast('Analisis selesai — tidak ada rekomendasi baru');
+        } else {
+          setEmptyReason(null);
+          showToast(`Analisis selesai: ${data.total_recommendations} rekomendasi baru`);
+        }
         await fetchRecs();
       } else {
         showToast('Analisis gagal: ' + (data.error || 'Unknown error'), 'error');
@@ -724,13 +731,30 @@ export default function RekomendasiPromoPage() {
               </div>
 
               {filteredRecs.length === 0 ? (
-                <div className="text-center py-16 card">
-                  <Package className="w-12 h-12 text-gray-200 mx-auto mb-3" />
-                  <p className="text-gray-500 text-sm">
-                    {recs.length === 0
-                      ? 'Belum ada rekomendasi. Klik "Refresh Analisis" untuk memulai.'
-                      : 'Tidak ada rekomendasi yang sesuai filter.'}
-                  </p>
+                <div className="text-center py-16 card space-y-2">
+                  <Package className="w-12 h-12 text-gray-200 mx-auto" />
+                  {recs.length === 0 ? (
+                    emptyReason === 'no_sale_data' ? (
+                      <>
+                        <p className="text-gray-700 text-sm font-medium">Data penjualan belum tersedia</p>
+                        <p className="text-gray-400 text-xs max-w-xs mx-auto">
+                          Pastikan SyncAgent sudah berjalan dan telah melakukan sync minimal 1 kali.
+                          Setelah sync selesai, klik &quot;Refresh Analisis&quot;.
+                        </p>
+                      </>
+                    ) : emptyReason === 'all_normal' ? (
+                      <>
+                        <p className="text-gray-700 text-sm font-medium">Semua produk dalam kondisi normal</p>
+                        <p className="text-gray-400 text-xs">Tidak ada produk yang butuh promo saat ini.</p>
+                      </>
+                    ) : (
+                      <p className="text-gray-500 text-sm">
+                        Belum ada rekomendasi. Klik &quot;Refresh Analisis&quot; untuk memulai.
+                      </p>
+                    )
+                  ) : (
+                    <p className="text-gray-500 text-sm">Tidak ada rekomendasi yang sesuai filter.</p>
+                  )}
                 </div>
               ) : (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
