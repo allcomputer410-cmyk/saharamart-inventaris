@@ -179,8 +179,11 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
 
     const agg = saleAggMap[spId];
     const lastSaleDate = agg?.last_sale_date || null;
-    // Jika tidak ada data penjualan sama sekali → anggap tidak terjual 31 hari (dead stock)
-    let daysNoSale = noSaleData ? 31 : 30;
+    // Default daysNoSale:
+    // - Jika produk tidak ada di saleAggMap (tidak pernah terjual) → 31 (dead stock)
+    // - Jika noSaleData global → 31
+    // - Jika ada agg tapi belum ada lastSaleDate → 30 (fallback netral)
+    let daysNoSale = (!agg || noSaleData) ? 31 : 30;
     if (lastSaleDate) {
       const last = new Date(lastSaleDate);
       daysNoSale = Math.floor((today.getTime() - last.getTime()) / (1000 * 60 * 60 * 24));
@@ -188,9 +191,9 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
     const avgDailyQty = agg ? agg.total_qty / 30 : 0;
 
     // Determine condition
-    // isDeadStock: tidak terjual > 30 hari, atau tidak ada data penjualan sama sekali
-    const isDeadStock = daysNoSale > 30 || (noSaleData && !agg);
-    // isSlowStock: terjual < 50% rata-rata (skip jika noSaleData karena avgDailyQtyPerProduct = 0)
+    // isDeadStock: tidak terjual > 30 hari ATAU produk tidak ada di data penjualan sama sekali
+    const isDeadStock = daysNoSale > 30 || !agg;
+    // isSlowStock: terjual < 50% rata-rata (hanya jika ada data dan produk memang ada penjualan)
     const isSlowStock = !isDeadStock && !noSaleData && avgDailyQtyPerProduct > 0 && avgDailyQty < avgDailyQtyPerProduct * 0.5;
     const isHighMargin = marginPct > 35;
 
