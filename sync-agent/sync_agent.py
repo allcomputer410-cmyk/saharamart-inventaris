@@ -18,6 +18,7 @@ Penggunaan:
   python sync_agent.py --type sales     # Sync penjualan saja
 """
 
+import os
 import sys
 import time
 import json
@@ -259,6 +260,9 @@ def sync_products(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str)
                hargapokok, hargajual1, supplier1, stokmin, stok,
                rak, dateupd, statusjual, statushapus
         FROM tbl_item
+        WHERE statushapus IS NULL
+           OR statushapus = ''
+           OR statushapus = 'N'
         ORDER BY kodeitem
     """)
     ipos_items = cur.fetchall()
@@ -310,7 +314,7 @@ def sync_products(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str)
             "sell_price": dec(item.get("hargajual1")),
             "shelf_location": str(item.get("rak") or "").strip() or None,
             "is_active": str(item.get("statusjual")) != "1",
-            "is_deleted": str(item.get("statushapus") or "0") == "1",
+            "is_deleted": False,  # sudah difilter di query (statushapus IS NULL/''/N)
             "ipos_kodeitem": kode,
             "ipos_supplier_code": sup_code or None,
             "category_id": cat_map.get(jenis) if jenis else None,
@@ -517,8 +521,13 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
         skipped_kode_samples = []
         for item in items:
             kode = str(item["kodeitem"]).strip()
-            # Lookup: exact match dulu, fallback ke uppercase
-            prod = prod_map.get(kode) or prod_map_upper.get(kode.upper())
+            # Lookup: exact → uppercase → strip leading zeros → zero-padded EAN-13
+            prod = (
+                prod_map.get(kode)
+                or prod_map_upper.get(kode.upper())
+                or prod_map.get(kode.lstrip('0'))
+                or prod_map.get(kode.zfill(13))
+            )
             if not prod:
                 skipped += 1
                 if len(skipped_kode_samples) < 5:
@@ -883,8 +892,39 @@ def sync_sales_transactions(ipos_conn, sb: SupabaseClient, kodekantor: str,
 # ---------------------------------------------------------------------------
 # Main sync orchestration
 # ---------------------------------------------------------------------------
+LOCK_FILE = "sync.lock"
+
+
 def run_sync(sync_type: str = "full"):
     """Run sync for all active stores."""
+    # File lock — cegah double sync jika proses sebelumnya masih berjalan
+    if os.path.exists(LOCK_FILE):
+        try:
+            with open(LOCK_FILE) as lf:
+                pid = lf.read().strip()
+            log.warning(f"Sync sudah berjalan (PID {pid}), skip.")
+        except Exception:
+            log.warning("Sync sudah berjalan (lock file ada), skip.")
+        return
+
+    try:
+        with open(LOCK_FILE, "w") as lf:
+            lf.write(str(os.getpid()))
+    except Exception as e:
+        log.warning(f"Tidak bisa buat lock file: {e}")
+
+    try:
+        _run_sync_inner(sync_type)
+    finally:
+        try:
+            if os.path.exists(LOCK_FILE):
+                os.remove(LOCK_FILE)
+        except Exception:
+            pass
+
+
+def _run_sync_inner(sync_type: str = "full"):
+    """Internal sync logic (dipanggil dari run_sync setelah lock)."""
     if not config.SUPABASE_URL or not config.SUPABASE_SERVICE_KEY:
         log.error("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
         return
