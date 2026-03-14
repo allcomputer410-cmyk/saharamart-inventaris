@@ -85,63 +85,66 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
     stockMap[s.store_product_id] = { current_qty: s.current_qty, min_qty: s.min_qty };
   });
 
-  // Filter products with stock > 0
+  // Filter products dengan stok >= 5 pcs (minimal layak rekomendasi)
   const products: ProductRow[] = rawProducts
     .map((p: { id: string; name: string; barcode: string; hpp: number; sell_price: number; category_id: string | null }) => ({
       ...p,
       current_qty: stockMap[p.id]?.current_qty ?? 0,
       min_qty: stockMap[p.id]?.min_qty ?? 0,
     }))
-    .filter((p: ProductRow) => p.current_qty > 0);
+    .filter((p: ProductRow) => p.current_qty >= 5);
 
   if (products.length === 0) return { count: 0, no_sale_data: true, products_with_stock: 0 };
 
-  // 2. Get sales data last 30 days
-  const { data: saleItems } = await supabase
-    .from('daily_sale_items')
-    .select('store_product_id, qty_sold, revenue, daily_sales!inner(sale_date)')
-    .eq('daily_sales.store_id', storeId)
-    .gte('daily_sales.sale_date', thirtyDaysAgoStr);
-
-  const saleAggMap: Record<string, SaleAgg> = {};
-  (saleItems || []).forEach((item: {
-    store_product_id: string;
-    qty_sold: number;
-    revenue: number;
-    daily_sales: { sale_date: string } | { sale_date: string }[];
-  }) => {
-    const saleDate = Array.isArray(item.daily_sales)
-      ? item.daily_sales[0]?.sale_date
-      : (item.daily_sales as { sale_date: string })?.sale_date;
-    if (!saleDate) return;
-    const spId = item.store_product_id;
-    if (!saleAggMap[spId]) {
-      saleAggMap[spId] = { store_product_id: spId, total_qty: 0, total_revenue: 0, days_sold: 0, last_sale_date: null };
-    }
-    saleAggMap[spId].total_qty += item.qty_sold || 0;
-    saleAggMap[spId].total_revenue += item.revenue || 0;
-    saleAggMap[spId].days_sold += 1;
-    if (!saleAggMap[spId].last_sale_date || saleDate > saleAggMap[spId].last_sale_date!) {
-      saleAggMap[spId].last_sale_date = saleDate;
-    }
-  });
-
-  // 3. Get avg transaction value
+  // 2. Get daily_sales untuk toko ini (last 30 hari)
   const { data: dailySalesData } = await supabase
     .from('daily_sales')
-    .select('total_revenue, total_transactions')
+    .select('id, sale_date, total_revenue, total_transactions')
     .eq('store_id', storeId)
     .gte('sale_date', thirtyDaysAgoStr);
 
   let avgTransaction = 50000; // fallback
+  const dailySaleIds: string[] = [];
+  const saleDateById: Record<string, string> = {};
   if (dailySalesData && dailySalesData.length > 0) {
     const totalRev = dailySalesData.reduce((s: number, d: { total_revenue: number }) => s + (d.total_revenue || 0), 0);
     const totalTxn = dailySalesData.reduce((s: number, d: { total_transactions: number }) => s + (d.total_transactions || 0), 0);
     if (totalTxn > 0) avgTransaction = totalRev / totalTxn;
+    dailySalesData.forEach((ds: { id: string; sale_date: string }) => {
+      dailySaleIds.push(ds.id);
+      saleDateById[ds.id] = ds.sale_date;
+    });
+  }
+
+  // 3. Get sale items — query langsung by daily_sale_id (lebih reliable dari join filter)
+  const saleAggMap: Record<string, SaleAgg> = {};
+  if (dailySaleIds.length > 0) {
+    // Batch query jika banyak daily_sale_ids (max 100 per batch untuk URL length)
+    const BATCH = 100;
+    for (let bi = 0; bi < dailySaleIds.length; bi += BATCH) {
+      const batchIds = dailySaleIds.slice(bi, bi + BATCH);
+      const { data: saleItems } = await supabase
+        .from('daily_sale_items')
+        .select('store_product_id, qty_sold, revenue, daily_sale_id')
+        .in('daily_sale_id', batchIds);
+      (saleItems || []).forEach((item: { store_product_id: string; qty_sold: number; revenue: number; daily_sale_id: string }) => {
+        const spId = item.store_product_id;
+        const saleDate = saleDateById[item.daily_sale_id] || '';
+        if (!saleAggMap[spId]) {
+          saleAggMap[spId] = { store_product_id: spId, total_qty: 0, total_revenue: 0, days_sold: 0, last_sale_date: null };
+        }
+        saleAggMap[spId].total_qty += item.qty_sold || 0;
+        saleAggMap[spId].total_revenue += item.revenue || 0;
+        saleAggMap[spId].days_sold += 1;
+        if (!saleAggMap[spId].last_sale_date || saleDate > saleAggMap[spId].last_sale_date!) {
+          saleAggMap[spId].last_sale_date = saleDate;
+        }
+      });
+    }
   }
 
   // Deteksi apakah ada data penjualan sama sekali
-  const noSaleData = !saleItems || saleItems.length === 0;
+  const noSaleData = dailySaleIds.length === 0 || Object.keys(saleAggMap).length === 0;
 
   // Store-level averages
   const totalStoreSales30 = Object.values(saleAggMap).reduce((s, a) => s + a.total_qty, 0);

@@ -54,6 +54,10 @@ log = logging.getLogger("sync_agent")
 class SupabaseClient:
     """Lightweight Supabase REST client using service_role key."""
 
+    REQUEST_TIMEOUT = 30  # detik per request
+    MAX_RETRIES = 3
+    RETRY_DELAYS = [5, 10, 20]  # detik antar retry (exponential backoff)
+
     def __init__(self, url: str, key: str):
         self.base = url.rstrip("/")
         self.headers = {
@@ -66,13 +70,43 @@ class SupabaseClient:
     def _url(self, table: str) -> str:
         return f"{self.base}/rest/v1/{table}"
 
+    def _do_request(self, method: str, url: str, **kwargs) -> requests.Response:
+        """Execute HTTP request dengan retry + exponential backoff untuk 5xx/502."""
+        last_err = None
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                kwargs.setdefault("timeout", self.REQUEST_TIMEOUT)
+                r = requests.request(method, url, **kwargs)
+                # Retry pada 5xx server errors (502, 503, 504, dll)
+                if r.status_code >= 500:
+                    if attempt < self.MAX_RETRIES - 1:
+                        delay = self.RETRY_DELAYS[attempt]
+                        log.warning(
+                            f"Supabase {r.status_code} pada {url.split('/')[-1]} "
+                            f"(attempt {attempt+1}/{self.MAX_RETRIES}) — retry dalam {delay}s"
+                        )
+                        time.sleep(delay)
+                        continue
+                return r
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                last_err = e
+                if attempt < self.MAX_RETRIES - 1:
+                    delay = self.RETRY_DELAYS[attempt]
+                    log.warning(
+                        f"Request error: {e} — retry {attempt+1}/{self.MAX_RETRIES} dalam {delay}s"
+                    )
+                    time.sleep(delay)
+        if last_err:
+            raise last_err
+        return r  # type: ignore
+
     def select(self, table: str, params: Optional[dict] = None) -> list:
-        r = requests.get(self._url(table), headers=self.headers, params=params or {})
+        r = self._do_request("GET", self._url(table), headers=self.headers, params=params or {})
         r.raise_for_status()
         return r.json()
 
     def select_all(self, table: str, params: Optional[dict] = None) -> list:
-        """Fetch ALL rows with auto-pagination (bypasses PostgREST 1000-row limit)."""
+        """Fetch ALL rows dengan auto-pagination (bypass PostgREST 1000-row limit)."""
         all_rows = []
         page_size = 1000
         offset = 0
@@ -92,7 +126,7 @@ class SupabaseClient:
         params = {}
         if on_conflict:
             params["on_conflict"] = on_conflict
-        r = requests.post(self._url(table), headers=headers, json=rows, params=params)
+        r = self._do_request("POST", self._url(table), headers=headers, json=rows, params=params)
         if not r.ok:
             try:
                 err = r.json()
@@ -104,18 +138,23 @@ class SupabaseClient:
         return r.json()
 
     def insert(self, table: str, rows: list) -> list:
-        r = requests.post(self._url(table), headers=self.headers, json=rows)
+        r = self._do_request("POST", self._url(table), headers=self.headers, json=rows)
         r.raise_for_status()
         return r.json()
 
     def update(self, table: str, data: dict, eq_filters: dict) -> list:
         params = {f"{k}": f"eq.{v}" for k, v in eq_filters.items()}
-        r = requests.patch(self._url(table), headers=self.headers, json=data, params=params)
+        r = self._do_request("PATCH", self._url(table), headers=self.headers, json=data, params=params)
         r.raise_for_status()
         return r.json()
 
+    def delete(self, table: str, params: dict) -> requests.Response:
+        r = self._do_request("DELETE", self._url(table), headers=self.headers, params=params)
+        return r
+
     def rpc(self, fn_name: str, params: Optional[dict] = None) -> dict:
-        r = requests.post(
+        r = self._do_request(
+            "POST",
             f"{self.base}/rest/v1/rpc/{fn_name}",
             headers=self.headers,
             json=params or {},
@@ -407,7 +446,7 @@ def sync_stock(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str) ->
 # ---------------------------------------------------------------------------
 def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
                days_back: int = 30) -> int:
-    """Sync daily sales from iPOS to daily_sales + daily_sale_items."""
+    """Sync daily sales dari iPOS ke daily_sales + daily_sale_items."""
     log.info(f"Syncing sales for store {kodekantor} (last {days_back} days)...")
 
     since_date = (date.today() - timedelta(days=days_back)).isoformat()
@@ -433,16 +472,18 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
         return 0
 
     # Get product mapping — gunakan ipos_kodeitem, fallback ke barcode
-    # (fallback diperlukan jika produk disync sebelum kolom ipos_kodeitem terisi)
+    # Build dua map: exact dan uppercase (untuk normalize perbedaan case)
     products = sb.select_all("store_products", {
         "store_id": f"eq.{store_id}",
         "select": "id,ipos_kodeitem,barcode,hpp",
     })
     prod_map: dict = {}
+    prod_map_upper: dict = {}  # fallback: uppercase lookup
     for p in products:
         key = str(p.get("ipos_kodeitem") or p.get("barcode") or "").strip()
         if key:
             prod_map[key] = p
+            prod_map_upper[key.upper()] = p
     log.info(f"Product map: {len(prod_map)} produk (dari {len(products)} di store_products)")
 
     now = datetime.utcnow().isoformat()
@@ -473,12 +514,16 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
         total_hpp = 0.0
         sale_items = []
         skipped = 0
+        skipped_kode_samples = []
         for item in items:
             kode = str(item["kodeitem"]).strip()
-            if kode not in prod_map:
+            # Lookup: exact match dulu, fallback ke uppercase
+            prod = prod_map.get(kode) or prod_map_upper.get(kode.upper())
+            if not prod:
                 skipped += 1
+                if len(skipped_kode_samples) < 5:
+                    skipped_kode_samples.append(kode)
                 continue
-            prod = prod_map[kode]
             qty = dec(item.get("qty_sold"))
             rev = dec(item.get("revenue"))
             hpp = dec(prod.get("hpp")) * qty
@@ -493,9 +538,11 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
             })
 
         if skipped > 0:
+            sample_str = ", ".join(skipped_kode_samples)
             log.warning(
                 f"{sale_date}: {skipped}/{len(items)} item dilewati "
-                f"— kodeitem tidak ditemukan di store_products"
+                f"— kodeitem tidak ditemukan di store_products "
+                f"(contoh: {sample_str})"
             )
         if not sale_items and items:
             log.warning(
@@ -524,10 +571,9 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
 
             # Hapus item lama untuk hari ini sebelum insert ulang
             try:
-                del_resp = requests.delete(
-                    f"{sb.base}/rest/v1/daily_sale_items",
-                    headers=sb.headers,
-                    params={"daily_sale_id": f"eq.{daily_sale_id}"},
+                del_resp = sb.delete(
+                    "daily_sale_items",
+                    {"daily_sale_id": f"eq.{daily_sale_id}"},
                 )
                 if not del_resp.ok:
                     log.warning(f"Delete items {sale_date}: HTTP {del_resp.status_code}")
