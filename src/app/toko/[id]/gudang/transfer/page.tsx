@@ -267,20 +267,32 @@ export default function TransferStokPage() {
         .eq('store_product_id', item.store_product_id)
         .single();
 
+      const qtyBefore = (stockRow?.current_qty as number) ?? 0;
+      const newQty = qtyBefore + item.qty;
+
       if (stockRow) {
-        const newQty = (stockRow.current_qty as number) + item.qty;
+        // Produk sudah ada di toko penerima → update
         await supabase.from('stock').update({ current_qty: newQty }).eq('id', stockRow.id);
-        await supabase.from('stock_movements').insert([{
+      } else {
+        // Produk belum ada di toko penerima → insert baru
+        await supabase.from('stock').insert([{
           store_id: storeId,
           store_product_id: item.store_product_id,
-          movement_type: 'transfer_in',
-          qty_before: stockRow.current_qty,
-          qty_change: item.qty,
-          qty_after: newQty,
-          reference_type: 'transfer',
-          reference_id: transfer.id,
+          current_qty: newQty,
+          min_qty: 0,
+          max_qty: 0,
         }]);
       }
+      await supabase.from('stock_movements').insert([{
+        store_id: storeId,
+        store_product_id: item.store_product_id,
+        movement_type: 'transfer_in',
+        qty_before: qtyBefore,
+        qty_change: item.qty,
+        qty_after: newQty,
+        reference_type: 'transfer',
+        reference_id: transfer.id,
+      }]);
     }
 
     await supabase.from('warehouse_transfers').update({ status: 'received' }).eq('id', transfer.id);
@@ -308,6 +320,17 @@ export default function TransferStokPage() {
         if (stockRow) {
           const newQty = (stockRow.current_qty as number) + item.qty;
           await supabase.from('stock').update({ current_qty: newQty }).eq('id', stockRow.id);
+          // Log pembatalan ke stock_movements
+          await supabase.from('stock_movements').insert([{
+            store_id: transfer.from_store_id,
+            store_product_id: item.store_product_id,
+            movement_type: 'transfer_cancel',
+            qty_before: stockRow.current_qty,
+            qty_change: item.qty,
+            qty_after: newQty,
+            reference_type: 'transfer',
+            reference_id: transfer.id,
+          }]);
         }
       }
     }

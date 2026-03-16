@@ -26,6 +26,7 @@ interface HeaderProps {
 
 interface Notification {
   id: string;
+  store_id: string | null;
   type: string;
   title: string;
   message: string;
@@ -81,7 +82,7 @@ export default function Header({ onMenuClick, pageTitle, userName = '', userRole
         (payload) => {
           const n = payload.new as Notification;
           // Hanya tampilkan jika untuk toko ini atau global (store_id null)
-          if (!n.is_read) {
+          if (!n.is_read && (n.store_id === storeId || n.store_id === null)) {
             setNotifications((prev) => [n, ...prev].slice(0, 50));
             setUnreadCount((c) => c + 1);
           }
