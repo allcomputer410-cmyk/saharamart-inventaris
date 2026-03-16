@@ -90,8 +90,7 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
 
   if (rawProducts.length === 0) return { count: 0, no_sale_data: true, products_with_stock: 0, debug: { raw_products: 0, stock_records: 0, daily_sales: 0, sale_items_aggregated: 0 } };
 
-  // Get stock data (paginated)
-  const productIds = rawProducts.map((p) => p.id);
+  // Get stock data (paginated) — filter by store_id only, no .in() karena 7000+ UUID bikin URL terlalu panjang
   let stockData: { store_product_id: string; current_qty: number; min_qty: number }[] = [];
   {
     const PAGE = 1000;
@@ -101,7 +100,6 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
         .from('stock')
         .select('store_product_id, current_qty, min_qty')
         .eq('store_id', storeId)
-        .in('store_product_id', productIds)
         .range(offset, offset + PAGE - 1);
       if (error || !page || page.length === 0) break;
       stockData = stockData.concat(page);
