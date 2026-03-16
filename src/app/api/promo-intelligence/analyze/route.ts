@@ -52,6 +52,12 @@ interface AnalyzeResult {
   count: number;
   no_sale_data: boolean;
   products_with_stock: number;
+  debug?: {
+    raw_products: number;
+    stock_records: number;
+    daily_sales: number;
+    sale_items_aggregated: number;
+  };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -62,26 +68,50 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0];
 
-  // 1. Get active products with stock
-  const { data: rawProducts } = await supabase
-    .from('store_products')
-    .select('id, name, barcode, hpp, sell_price, category_id')
-    .eq('store_id', storeId)
-    .eq('is_active', true)
-    .eq('is_deleted', false);
+  // 1. Get active products with stock (paginated — PostgREST default limit = 1000, produk bisa 7000+)
+  let rawProducts: { id: string; name: string; barcode: string; hpp: number; sell_price: number; category_id: string | null }[] = [];
+  {
+    const PAGE = 1000;
+    let offset = 0;
+    while (true) {
+      const { data: page, error } = await supabase
+        .from('store_products')
+        .select('id, name, barcode, hpp, sell_price, category_id')
+        .eq('store_id', storeId)
+        .eq('is_active', true)
+        .eq('is_deleted', false)
+        .range(offset, offset + PAGE - 1);
+      if (error || !page || page.length === 0) break;
+      rawProducts = rawProducts.concat(page);
+      if (page.length < PAGE) break;
+      offset += PAGE;
+    }
+  }
 
-  if (!rawProducts || rawProducts.length === 0) return { count: 0, no_sale_data: true, products_with_stock: 0 };
+  if (rawProducts.length === 0) return { count: 0, no_sale_data: true, products_with_stock: 0, debug: { raw_products: 0, stock_records: 0, daily_sales: 0, sale_items_aggregated: 0 } };
 
-  // Get stock data
-  const productIds = rawProducts.map((p: { id: string }) => p.id);
-  const { data: stockData } = await supabase
-    .from('stock')
-    .select('store_product_id, current_qty, min_qty')
-    .eq('store_id', storeId)
-    .in('store_product_id', productIds);
+  // Get stock data (paginated)
+  const productIds = rawProducts.map((p) => p.id);
+  let stockData: { store_product_id: string; current_qty: number; min_qty: number }[] = [];
+  {
+    const PAGE = 1000;
+    let offset = 0;
+    while (true) {
+      const { data: page, error } = await supabase
+        .from('stock')
+        .select('store_product_id, current_qty, min_qty')
+        .eq('store_id', storeId)
+        .in('store_product_id', productIds)
+        .range(offset, offset + PAGE - 1);
+      if (error || !page || page.length === 0) break;
+      stockData = stockData.concat(page);
+      if (page.length < PAGE) break;
+      offset += PAGE;
+    }
+  }
 
   const stockMap: Record<string, { current_qty: number; min_qty: number }> = {};
-  (stockData || []).forEach((s: { store_product_id: string; current_qty: number; min_qty: number }) => {
+  stockData.forEach((s) => {
     stockMap[s.store_product_id] = { current_qty: s.current_qty, min_qty: s.min_qty };
   });
 
@@ -94,7 +124,7 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
     }))
     .filter((p: ProductRow) => p.current_qty >= 5);
 
-  if (products.length === 0) return { count: 0, no_sale_data: true, products_with_stock: 0 };
+  if (products.length === 0) return { count: 0, no_sale_data: true, products_with_stock: 0, debug: { raw_products: rawProducts.length, stock_records: stockData.length, daily_sales: 0, sale_items_aggregated: 0 } };
 
   // 2. Get daily_sales untuk toko ini (last 30 hari)
   const { data: dailySalesData } = await supabase
@@ -119,27 +149,36 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
   // 3. Get sale items — query langsung by daily_sale_id (lebih reliable dari join filter)
   const saleAggMap: Record<string, SaleAgg> = {};
   if (dailySaleIds.length > 0) {
-    // Batch query jika banyak daily_sale_ids (max 100 per batch untuk URL length)
-    const BATCH = 100;
+    // Batch query jika banyak daily_sale_ids (max 50 per batch untuk URL length)
+    // Setiap batch juga paginated karena satu daily_sale bisa punya banyak items
+    const BATCH = 50;
     for (let bi = 0; bi < dailySaleIds.length; bi += BATCH) {
       const batchIds = dailySaleIds.slice(bi, bi + BATCH);
-      const { data: saleItems } = await supabase
-        .from('daily_sale_items')
-        .select('store_product_id, qty_sold, revenue, daily_sale_id')
-        .in('daily_sale_id', batchIds);
-      (saleItems || []).forEach((item: { store_product_id: string; qty_sold: number; revenue: number; daily_sale_id: string }) => {
-        const spId = item.store_product_id;
-        const saleDate = saleDateById[item.daily_sale_id] || '';
-        if (!saleAggMap[spId]) {
-          saleAggMap[spId] = { store_product_id: spId, total_qty: 0, total_revenue: 0, days_sold: 0, last_sale_date: null };
-        }
-        saleAggMap[spId].total_qty += item.qty_sold || 0;
-        saleAggMap[spId].total_revenue += item.revenue || 0;
-        saleAggMap[spId].days_sold += 1;
-        if (!saleAggMap[spId].last_sale_date || saleDate > saleAggMap[spId].last_sale_date!) {
-          saleAggMap[spId].last_sale_date = saleDate;
-        }
-      });
+      const PAGE = 1000;
+      let offset = 0;
+      while (true) {
+        const { data: saleItems, error } = await supabase
+          .from('daily_sale_items')
+          .select('store_product_id, qty_sold, revenue, daily_sale_id')
+          .in('daily_sale_id', batchIds)
+          .range(offset, offset + PAGE - 1);
+        if (error || !saleItems || saleItems.length === 0) break;
+        saleItems.forEach((item: { store_product_id: string; qty_sold: number; revenue: number; daily_sale_id: string }) => {
+          const spId = item.store_product_id;
+          const saleDate = saleDateById[item.daily_sale_id] || '';
+          if (!saleAggMap[spId]) {
+            saleAggMap[spId] = { store_product_id: spId, total_qty: 0, total_revenue: 0, days_sold: 0, last_sale_date: null };
+          }
+          saleAggMap[spId].total_qty += item.qty_sold || 0;
+          saleAggMap[spId].total_revenue += item.revenue || 0;
+          saleAggMap[spId].days_sold += 1;
+          if (!saleAggMap[spId].last_sale_date || saleDate > saleAggMap[spId].last_sale_date!) {
+            saleAggMap[spId].last_sale_date = saleDate;
+          }
+        });
+        if (saleItems.length < PAGE) break;
+        offset += PAGE;
+      }
     }
   }
 
@@ -391,7 +430,8 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
     });
   }
 
-  if (recommendations.length === 0) return { count: 0, no_sale_data: noSaleData, products_with_stock: products.length };
+  const debugInfo = { raw_products: rawProducts.length, stock_records: stockData.length, daily_sales: dailySaleIds.length, sale_items_aggregated: Object.keys(saleAggMap).length };
+  if (recommendations.length === 0) return { count: 0, no_sale_data: noSaleData, products_with_stock: products.length, debug: debugInfo };
 
   // Clear old pending recommendations
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -419,7 +459,7 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
     is_read: false,
   }]);
 
-  return { count: recommendations.length, no_sale_data: noSaleData, products_with_stock: products.length };
+  return { count: recommendations.length, no_sale_data: noSaleData, products_with_stock: products.length, debug: debugInfo };
 }
 
 // POST: manual trigger or from app
@@ -429,11 +469,11 @@ export async function POST(request: NextRequest) {
     const storeId: string | undefined = body?.store_id;
 
     const supabase = getAdminClient();
-    const perStore: { store_id: string; recommendations: number; no_sale_data: boolean; products_with_stock: number }[] = [];
+    const perStore: { store_id: string; recommendations: number; no_sale_data: boolean; products_with_stock: number; debug?: AnalyzeResult['debug'] }[] = [];
 
     if (storeId) {
       const result = await analyzeStore(supabase, storeId);
-      perStore.push({ store_id: storeId, recommendations: result.count, no_sale_data: result.no_sale_data, products_with_stock: result.products_with_stock });
+      perStore.push({ store_id: storeId, recommendations: result.count, no_sale_data: result.no_sale_data, products_with_stock: result.products_with_stock, debug: result.debug });
     } else {
       // Analyze all active stores
       const { data: stores } = await supabase
@@ -443,7 +483,7 @@ export async function POST(request: NextRequest) {
 
       for (const store of stores || []) {
         const result = await analyzeStore(supabase, store.id);
-        perStore.push({ store_id: store.id, recommendations: result.count, no_sale_data: result.no_sale_data, products_with_stock: result.products_with_stock });
+        perStore.push({ store_id: store.id, recommendations: result.count, no_sale_data: result.no_sale_data, products_with_stock: result.products_with_stock, debug: result.debug });
       }
     }
 
