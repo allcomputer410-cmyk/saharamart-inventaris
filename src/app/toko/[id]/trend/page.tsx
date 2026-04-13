@@ -42,6 +42,7 @@ export default function TrendPage() {
   const [daysRange, setDaysRange] = useState(30);
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [storeName, setStoreName] = useState('');
 
   useEffect(() => {
     async function fetchTrend() {
@@ -51,16 +52,33 @@ export default function TrendPage() {
       sinceDate.setDate(sinceDate.getDate() - daysRange);
       const sinceDateStr = sinceDate.toISOString().split('T')[0];
 
-      const { data: storeProducts } = await supabase
-        .from('store_products')
-        .select(`
-          id, barcode, name, unit, category_id,
-          category:categories(name),
-          stock:stock(current_qty)
-        `)
-        .eq('store_id', storeId)
-        .eq('is_deleted', false)
-        .eq('is_active', true);
+      const { data: storeData } = await supabase.from('stores').select('name').eq('id', storeId).single();
+      setStoreName(storeData?.name || 'Toko');
+
+      // Paginate store_products — Supabase default limit 1000, toko bisa 7000+ produk
+      type RawProduct = { id: string; barcode: string; name: string; unit: string; category_id: string; category: { name: string } | { name: string }[] | null; stock: { current_qty: number } | { current_qty: number }[] | null };
+      const storeProducts: RawProduct[] = [];
+      {
+        const PAGE = 1000;
+        let offset = 0;
+        while (true) {
+          const { data: page } = await supabase
+            .from('store_products')
+            .select(`
+              id, barcode, name, unit, category_id,
+              category:categories(name),
+              stock:stock(current_qty)
+            `)
+            .eq('store_id', storeId)
+            .eq('is_deleted', false)
+            .eq('is_active', true)
+            .range(offset, offset + PAGE - 1);
+          if (!page || page.length === 0) break;
+          storeProducts.push(...(page as RawProduct[]));
+          if (page.length < PAGE) break;
+          offset += PAGE;
+        }
+      }
 
       const { data: dailySales } = await supabase
         .from('daily_sales')
@@ -72,16 +90,28 @@ export default function TrendPage() {
 
       const saleItemsMap = new Map<string, { totalSold: number; totalRevenue: number }>();
       if (dailySaleIds.length > 0) {
-        const { data: saleItems } = await supabase
-          .from('daily_sale_items')
-          .select('store_product_id, qty_sold, revenue')
-          .in('daily_sale_id', dailySaleIds);
-
-        for (const item of saleItems || []) {
-          const existing = saleItemsMap.get(item.store_product_id) || { totalSold: 0, totalRevenue: 0 };
-          existing.totalSold += item.qty_sold || 0;
-          existing.totalRevenue += item.revenue || 0;
-          saleItemsMap.set(item.store_product_id, existing);
+        // Batch + paginate daily_sale_items — bisa ribuan item per periode
+        const BATCH = 50;
+        for (let bi = 0; bi < dailySaleIds.length; bi += BATCH) {
+          const batchIds = dailySaleIds.slice(bi, bi + BATCH);
+          const PAGE = 1000;
+          let offset = 0;
+          while (true) {
+            const { data: saleItems } = await supabase
+              .from('daily_sale_items')
+              .select('store_product_id, qty_sold, revenue')
+              .in('daily_sale_id', batchIds)
+              .range(offset, offset + PAGE - 1);
+            if (!saleItems || saleItems.length === 0) break;
+            for (const item of saleItems) {
+              const existing = saleItemsMap.get(item.store_product_id) || { totalSold: 0, totalRevenue: 0 };
+              existing.totalSold += item.qty_sold || 0;
+              existing.totalRevenue += item.revenue || 0;
+              saleItemsMap.set(item.store_product_id, existing);
+            }
+            if (saleItems.length < PAGE) break;
+            offset += PAGE;
+          }
         }
       }
 
@@ -244,7 +274,7 @@ export default function TrendPage() {
               </View>
             ))}
 
-            <Text style={s.footer}>SAHARAMART — Sistem Manajemen Inventaris</Text>
+            <Text style={s.footer}>{storeName} — Sistem Manajemen Inventaris</Text>
           </Page>
         </Document>
       );

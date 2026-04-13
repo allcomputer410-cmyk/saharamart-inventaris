@@ -183,10 +183,20 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
   // Deteksi apakah ada data penjualan sama sekali
   const noSaleData = dailySaleIds.length === 0 || Object.keys(saleAggMap).length === 0;
 
+  // GUARD: Jika tidak ada data penjualan sama sekali, hentikan analisis.
+  // Tanpa guard ini, semua produk akan dianggap dead stock (false positive massal)
+  // karena engine tidak bisa membedakan "memang tidak laku" vs "sync belum jalan".
+  if (noSaleData) {
+    return { count: 0, no_sale_data: true, products_with_stock: products.length, debug: { raw_products: rawProducts.length, stock_records: stockData.length, daily_sales: dailySaleIds.length, sale_items_aggregated: 0 } };
+  }
+
   // Store-level averages
   const totalStoreSales30 = Object.values(saleAggMap).reduce((s, a) => s + a.total_qty, 0);
   const storeAvgDailyQty = totalStoreSales30 / 30;
-  const avgDailyQtyPerProduct = products.length > 0 ? storeAvgDailyQty / products.length : 0;
+  // Denominator: hanya produk yang benar-benar terjual (ada di saleAggMap) agar
+  // threshold slow stock tidak terlalu kecil akibat ribuan produk tak terjual ikut dihitung
+  const sellingProductCount = products.filter(p => !!saleAggMap[p.id]).length;
+  const avgDailyQtyPerProduct = sellingProductCount > 0 ? storeAvgDailyQty / sellingProductCount : 0;
 
   // Total HPP for store margin calculation
   let totalRevenue30 = 0;
@@ -230,8 +240,9 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
     // Determine condition
     // isDeadStock: tidak terjual > 30 hari ATAU produk tidak ada di data penjualan sama sekali
     const isDeadStock = daysNoSale > 30 || !agg;
-    // isSlowStock: terjual < 50% rata-rata (hanya jika ada data dan produk memang ada penjualan)
-    const isSlowStock = !isDeadStock && !noSaleData && avgDailyQtyPerProduct > 0 && avgDailyQty < avgDailyQtyPerProduct * 0.5;
+    // isSlowStock: rata-rata harian < 1 pcs/hari — sama persis dengan definisi tab Slow Moving
+    // di Trend & Analisis (avgDailySold < 1) agar kedua sistem searah dan konsisten
+    const isSlowStock = !isDeadStock && avgDailyQty > 0 && avgDailyQty < 1;
     const isHighMargin = marginPct > 35;
 
     if (!isDeadStock && !isSlowStock && !(isHighMargin && daysNoSale >= 7)) continue;
