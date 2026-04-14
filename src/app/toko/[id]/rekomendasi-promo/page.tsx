@@ -17,7 +17,9 @@ import {
   Clock,
   ChevronDown,
   ChevronUp,
+  ImagePlus,
 } from 'lucide-react';
+import PromoPostModal from './PromoPostModal';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -109,6 +111,7 @@ function RecommendationCard({
   onStartEdit,
   onSaveEdit,
   onEditParamChange,
+  onOpenPoster,
 }: {
   rec: PromoRecommendation;
   editingId: string | null;
@@ -118,6 +121,7 @@ function RecommendationCard({
   onStartEdit: (rec: PromoRecommendation) => void;
   onSaveEdit: (rec: PromoRecommendation) => void;
   onEditParamChange: (key: string, value: number) => void;
+  onOpenPoster: (rec: PromoRecommendation) => void;
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const isEditing = editingId === rec.id;
@@ -357,9 +361,9 @@ function RecommendationCard({
       )}
 
       {/* Action buttons */}
-      <div className="flex gap-2 pt-1">
+      <div className="pt-1">
         {isEditing ? (
-          <>
+          <div className="flex gap-2">
             <button
               onClick={() => onSaveEdit(rec)}
               disabled={marginPct < 0}
@@ -374,31 +378,38 @@ function RecommendationCard({
             >
               Batal
             </button>
-          </>
+          </div>
         ) : (
-          <>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <button
               onClick={() => onApprove(rec)}
-              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-lg transition-colors"
+              className="flex items-center justify-center gap-1.5 px-3 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-lg transition-colors"
             >
               <CheckCircle className="w-3.5 h-3.5" />
               Setuju
             </button>
             <button
               onClick={() => onStartEdit(rec)}
-              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg transition-colors"
+              className="flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg transition-colors"
             >
               <SlidersHorizontal className="w-3.5 h-3.5" />
-              Ubah Parameter
+              Ubah
+            </button>
+            <button
+              onClick={() => onOpenPoster(rec)}
+              className="flex items-center justify-center gap-1.5 px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-lg transition-colors"
+            >
+              <ImagePlus className="w-3.5 h-3.5" />
+              Poster
             </button>
             <button
               onClick={() => onReject(rec.id)}
-              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 border border-red-300 text-red-600 text-xs font-medium rounded-lg hover:bg-red-50 transition-colors"
+              className="flex items-center justify-center gap-1.5 px-3 py-2 border border-red-300 text-red-600 text-xs font-medium rounded-lg hover:bg-red-50 transition-colors"
             >
               <XCircle className="w-3.5 h-3.5" />
               Tolak
             </button>
-          </>
+          </div>
         )}
       </div>
     </div>
@@ -423,6 +434,8 @@ export default function RekomendasiPromoPage() {
   const [editParams, setEditParams] = useState<Record<string, number>>({});
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
   const [emptyReason, setEmptyReason] = useState<'no_sale_data' | 'all_normal' | null>(null);
+  const [storeName, setStoreName] = useState('');
+  const [posterRec, setPosterRec] = useState<PromoRecommendation | null>(null);
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ msg, type });
@@ -431,7 +444,7 @@ export default function RekomendasiPromoPage() {
 
   const fetchRecs = useCallback(async () => {
     setLoading(true);
-    const [{ data: pending }, { data: hist }] = await Promise.all([
+    const [{ data: pending }, { data: hist }, { data: storeData }] = await Promise.all([
       supabase
         .from('promo_recommendations')
         .select('*')
@@ -446,7 +459,9 @@ export default function RekomendasiPromoPage() {
         .in('status', ['approved', 'rejected'])
         .order('created_at', { ascending: false })
         .limit(50),
+      supabase.from('stores').select('name').eq('id', storeId).single(),
     ]);
+    if (storeData) setStoreName(storeData.name ?? '');
     // Sort pending by priority order
     const sortedPending = (pending || []).sort((a: PromoRecommendation, b: PromoRecommendation) => {
       return PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority);
@@ -649,8 +664,21 @@ export default function RekomendasiPromoPage() {
   const urgentCount = recs.filter((r) => r.priority === 'urgent').length;
   const latestAnalyzedAt = recs.length > 0 ? recs[0].analyzed_at : null;
 
+  const handleOpenPoster = (rec: PromoRecommendation) => {
+    setPosterRec(rec);
+  };
+
   return (
     <div className="space-y-4">
+      {/* Poster Modal */}
+      {posterRec && (
+        <PromoPostModal
+          rec={posterRec}
+          storeName={storeName}
+          onClose={() => setPosterRec(null)}
+        />
+      )}
+
       {/* Toast */}
       {toast && (
         <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-white transition-all ${toast.type === 'success' ? 'bg-green-600' : 'bg-red-600'}`}>
@@ -777,6 +805,7 @@ export default function RekomendasiPromoPage() {
                       onStartEdit={handleStartEdit}
                       onSaveEdit={handleSaveEdit}
                       onEditParamChange={handleEditParamChange}
+                      onOpenPoster={handleOpenPoster}
                     />
                   ))}
                 </div>
