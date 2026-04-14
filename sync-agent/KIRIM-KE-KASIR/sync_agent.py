@@ -36,14 +36,39 @@ import schedule
 import config
 
 # ---------------------------------------------------------------------------
-# Logging
+# Logging — force UTF-8 pada stdout Windows (cegah charmap error nama produk)
 # ---------------------------------------------------------------------------
+import io as _io
+
+def _fix_stdout_utf8():
+    """Paksa stdout/stderr Windows ke UTF-8 agar nama produk special chars aman."""
+    try:
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        elif hasattr(sys.stdout, 'buffer'):
+            sys.stdout = _io.TextIOWrapper(
+                sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True
+            )
+    except Exception:
+        pass
+    try:
+        if hasattr(sys.stderr, 'reconfigure'):
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        elif hasattr(sys.stderr, 'buffer'):
+            sys.stderr = _io.TextIOWrapper(
+                sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True
+            )
+    except Exception:
+        pass
+
+_fix_stdout_utf8()
+
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("sync_agent.log", encoding="utf-8"),
+        logging.FileHandler("sync_agent.log", encoding="utf-8", errors="replace"),
     ],
 )
 log = logging.getLogger("sync_agent")
@@ -173,6 +198,20 @@ def dec(val) -> float:
     if isinstance(val, Decimal):
         return float(val)
     return float(val)
+
+
+def safe_str(val, fallback: str = "") -> str:
+    """Konversi nilai dari psycopg2 ke str dengan aman.
+    Menghindari charmap/UnicodeDecodeError pada nama produk dengan karakter khusus.
+    """
+    if val is None:
+        return fallback
+    if isinstance(val, bytes):
+        return val.decode("utf-8", errors="replace")
+    try:
+        return str(val)
+    except Exception:
+        return fallback
 
 
 # ---------------------------------------------------------------------------
@@ -308,12 +347,12 @@ def sync_products(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str)
         product_data = {
             "store_id": store_id,
             "barcode": kode,
-            "name": str(item.get("namaitem") or kode).strip(),
-            "unit": str(item.get("satuan") or "PCS").strip(),
+            "name": safe_str(item.get("namaitem"), kode).strip(),
+            "unit": safe_str(item.get("satuan"), "PCS").strip(),
             "hpp": dec(item.get("hargapokok")),
             "sell_price": dec(item.get("hargajual1")),
-            "shelf_location": str(item.get("rak") or "").strip() or None,
-            "is_active": str(item.get("statusjual")) != "1",
+            "shelf_location": safe_str(item.get("rak")).strip() or None,
+            "is_active": safe_str(item.get("statusjual")) != "1",
             "is_deleted": False,  # sudah difilter di query (statushapus IS NULL/''/N)
             "ipos_kodeitem": kode,
             "ipos_supplier_code": sup_code or None,
@@ -475,20 +514,37 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
         cur.close()
         return 0
 
-    # Get product mapping — gunakan ipos_kodeitem, fallback ke barcode
-    # Build dua map: exact dan uppercase (untuk normalize perbedaan case)
+    # Get product mapping — daftarkan SEMUA varian key agar lookup lebih robust
     products = sb.select_all("store_products", {
         "store_id": f"eq.{store_id}",
         "select": "id,ipos_kodeitem,barcode,hpp",
     })
     prod_map: dict = {}
-    prod_map_upper: dict = {}  # fallback: uppercase lookup
+    prod_map_upper: dict = {}
+
+    def _register(key: str, p: dict):
+        """Daftarkan key dan semua variannya ke prod_map."""
+        if not key:
+            return
+        prod_map[key] = p
+        prod_map_upper[key.upper()] = p
+        # Varian tanpa leading zero (misal: "089686598025" → "89686598025")
+        stripped = key.lstrip('0')
+        if stripped and stripped != key:
+            prod_map[stripped] = p
+            prod_map_upper[stripped.upper()] = p
+        # Varian zero-padded ke 13 digit EAN (misal: "89686598025" → "089686598025")
+        padded = key.zfill(13)
+        if padded != key:
+            prod_map[padded] = p
+            prod_map_upper[padded.upper()] = p
+
     for p in products:
-        key = str(p.get("ipos_kodeitem") or p.get("barcode") or "").strip()
-        if key:
-            prod_map[key] = p
-            prod_map_upper[key.upper()] = p
-    log.info(f"Product map: {len(prod_map)} produk (dari {len(products)} di store_products)")
+        # Daftarkan ipos_kodeitem DAN barcode sebagai key (keduanya, bukan salah satu)
+        _register(str(p.get("ipos_kodeitem") or "").strip(), p)
+        _register(str(p.get("barcode") or "").strip(), p)
+
+    log.info(f"Product map: {len(prod_map)} keys (dari {len(products)} produk di store_products)")
 
     now = datetime.utcnow().isoformat()
     count = 0
@@ -521,13 +577,8 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
         skipped_kode_samples = []
         for item in items:
             kode = str(item["kodeitem"]).strip()
-            # Lookup: exact → uppercase → strip leading zeros → zero-padded EAN-13
-            prod = (
-                prod_map.get(kode)
-                or prod_map_upper.get(kode.upper())
-                or prod_map.get(kode.lstrip('0'))
-                or prod_map.get(kode.zfill(13))
-            )
+            # Semua varian sudah didaftarkan saat build map — cukup exact + uppercase
+            prod = prod_map.get(kode) or prod_map_upper.get(kode.upper())
             if not prod:
                 skipped += 1
                 if len(skipped_kode_samples) < 5:
@@ -645,13 +696,13 @@ def sync_suppliers(ipos_conn, sb: SupabaseClient, store_id: str = None) -> int:
 
         data = {
             "code": kode,
-            "name": str(sup.get("nama") or kode).strip(),
+            "name": safe_str(sup.get("nama"), kode).strip(),
             "type": "S",
-            "address": str(sup.get("alamat") or "").strip() or None,
-            "city": str(sup.get("kota") or "").strip() or None,
-            "phone": str(sup.get("telepon") or sup.get("hp") or "").strip() or None,
-            "email": str(sup.get("email") or "").strip() or None,
-            "contact_person": str(sup.get("kontak") or "").strip() or None,
+            "address": safe_str(sup.get("alamat")).strip() or None,
+            "city": safe_str(sup.get("kota")).strip() or None,
+            "phone": safe_str(sup.get("telepon") or sup.get("hp")).strip() or None,
+            "email": safe_str(sup.get("email")).strip() or None,
+            "contact_person": safe_str(sup.get("kontak")).strip() or None,
             "ipos_kode": kode,
             "is_active": True,
         }
@@ -771,32 +822,55 @@ def sync_purchases(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str
 
     for h in headers:
         notrans = h["notransaksi"]
-        kodesupel = str(h.get("kodesupel") or "").strip()
+        kodesupel = safe_str(h.get("kodesupel")).strip()
 
         purchase_data = {
             "store_id":         store_id,
             "ipos_notransaksi": notrans,
             "faktur_no":        notrans,
             "tanggal":          h["tanggal"].isoformat() if h.get("tanggal") else None,
-            "tipe":             str(h.get("tipe") or "BL").strip(),
-            "ipos_kodesupel":   kodesupel,
-            "supplier_id":      supplier_map.get(kodesupel),
+            "tipe":             safe_str(h.get("tipe"), "BL").strip(),
+            "ipos_kodesupel":   kodesupel or None,
+            "supplier_id":      supplier_map.get(kodesupel) if kodesupel else None,
             "total_item":       dec(h.get("totalitem")),
             "subtotal":         dec(h.get("subtotal")),
             "potongan":         dec(h.get("potfaktur")),
             "pajak":            dec(h.get("pajak")),
             "total_akhir":      dec(h.get("totalakhir")),
-            "cara_bayar":       str(h.get("carabayar") or "").strip() or None,
-            "keterangan":       str(h.get("keterangan") or "").strip() or None,
+            "cara_bayar":       safe_str(h.get("carabayar")).strip() or None,
+            "keterangan":       safe_str(h.get("keterangan")).strip() or None,
             "synced_at":        now,
             "updated_at":       now,
         }
 
+        # --- Upsert purchase header (robust: tidak bergantung pada satu constraint) ---
+        result = None
         if notrans in existing_map:
+            # Record sudah ada → update langsung by primary key (selalu aman)
             purchase_data["id"] = existing_map[notrans]
+            result = sb.upsert("purchases", [purchase_data], on_conflict="id")
+        else:
+            # Record baru → coba composite constraint (post-migration),
+            # fallback ke constraint lama jika migration belum dijalankan
+            try:
+                result = sb.upsert(
+                    "purchases", [purchase_data],
+                    on_conflict="store_id,ipos_notransaksi"
+                )
+            except Exception as e:
+                log.warning(
+                    f"Purchases upsert store_id+ipos_notransaksi gagal ({e}), "
+                    f"coba fallback constraint ipos_notransaksi..."
+                )
+                try:
+                    result = sb.upsert(
+                        "purchases", [purchase_data],
+                        on_conflict="ipos_notransaksi"
+                    )
+                except Exception as e2:
+                    log.error(f"Purchase {notrans} gagal diupsert: {e2}")
+                    continue
 
-        # Upsert purchase header
-        result = sb.upsert("purchases", [purchase_data], on_conflict="ipos_notransaksi")
         if not result:
             continue
         purchase_id = result[0]["id"]
@@ -805,8 +879,8 @@ def sync_purchases(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str
         items = details_map.get(notrans, [])
         item_rows = []
         for d in items:
-            kode = str(d.get("kodeitem") or "").strip()
-            iddetail = str(d.get("iddetail") or "").strip()
+            kode = safe_str(d.get("kodeitem")).strip()
+            iddetail = safe_str(d.get("iddetail")).strip()
             if not iddetail:
                 continue
             item_rows.append({
@@ -815,7 +889,7 @@ def sync_purchases(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str
                 "ipos_kodeitem":    kode,
                 "ipos_iddetail":    iddetail,
                 "jumlah":           dec(d.get("jumlah")),
-                "satuan":           str(d.get("satuan") or "").strip() or None,
+                "satuan":           safe_str(d.get("satuan")).strip() or None,
                 "harga":            dec(d.get("harga")),
                 "potongan":         dec(d.get("potongan")),
                 "total":            dec(d.get("total")),
@@ -883,7 +957,7 @@ def sync_sales_transactions(ipos_conn, sb: SupabaseClient, kodekantor: str,
     BATCH = 500
     for i in range(0, len(to_upsert), BATCH):
         sb.upsert("sales_transactions", to_upsert[i:i+BATCH],
-                  on_conflict="notransaksi")
+                  on_conflict="store_id,notransaksi")
 
     log.info(f"Synced {len(to_upsert)} sales transactions")
     return len(to_upsert)
@@ -895,8 +969,8 @@ def sync_sales_transactions(ipos_conn, sb: SupabaseClient, kodekantor: str,
 LOCK_FILE = "sync.lock"
 
 
-def run_sync(sync_type: str = "full"):
-    """Run sync for all active stores."""
+def run_sync(sync_type: str = "full", store_code: str = None):
+    """Run sync for all active stores (or one specific store if store_code given)."""
     # File lock — cegah double sync jika proses sebelumnya masih berjalan
     if os.path.exists(LOCK_FILE):
         try:
@@ -914,7 +988,7 @@ def run_sync(sync_type: str = "full"):
         log.warning(f"Tidak bisa buat lock file: {e}")
 
     try:
-        _run_sync_inner(sync_type)
+        _run_sync_inner(sync_type, store_code=store_code)
     finally:
         try:
             if os.path.exists(LOCK_FILE):
@@ -923,7 +997,7 @@ def run_sync(sync_type: str = "full"):
             pass
 
 
-def _run_sync_inner(sync_type: str = "full"):
+def _run_sync_inner(sync_type: str = "full", store_code: str = None):
     """Internal sync logic (dipanggil dari run_sync setelah lock)."""
     if not config.SUPABASE_URL or not config.SUPABASE_SERVICE_KEY:
         log.error("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
@@ -932,10 +1006,13 @@ def _run_sync_inner(sync_type: str = "full"):
     sb = SupabaseClient(config.SUPABASE_URL, config.SUPABASE_SERVICE_KEY)
 
     # Get active stores with iPOS config
-    stores = sb.select("stores", {
+    store_params = {
         "is_active": "eq.true",
         "select": "id,code,name,ipos_kodekantor,ipos_db_host,ipos_db_port,ipos_db_name",
-    })
+    }
+    if store_code:
+        store_params["code"] = f"eq.{store_code}"
+    stores = sb.select("stores", store_params)
 
     if not stores:
         log.warning("No active stores found")
@@ -1058,21 +1135,34 @@ def main():
     parser.add_argument("--type", choices=["full", "products", "stock", "sales", "purchases"],
                         default="full", help="Type of sync to run")
     parser.add_argument("--days", type=int, default=7, help="Days of sales to sync (default: 7)")
+    parser.add_argument("--store", default=None,
+                        help="Filter sync ke satu toko saja berdasarkan code (contoh: ARM01, SM01)")
     args = parser.parse_args()
+
+    # Override SALES_DAYS_BACK dari argumen --days
+    if args.days != 7:
+        config.SALES_DAYS_BACK = args.days
+
+    # Tentukan filter toko: prioritas --store arg, fallback ke STORE_CODE di .env
+    store_filter = args.store or config.STORE_CODE or None
 
     log.info("=" * 60)
     log.info("iPOS Sync Agent started")
     log.info(f"Supabase: {config.SUPABASE_URL}")
     log.info(f"iPOS: {config.IPOS_DB_HOST}:{config.IPOS_DB_PORT}/{config.IPOS_DB_NAME}")
+    if store_filter:
+        log.info(f"Filter toko: {store_filter} (hanya sync toko ini)")
+    else:
+        log.info("Filter toko: semua toko aktif")
     log.info("=" * 60)
 
     if args.daemon:
         log.info(f"Daemon mode: syncing every {config.SYNC_INTERVAL} minutes")
         # Run once immediately
-        run_sync(args.type)
+        run_sync(args.type, store_code=store_filter)
 
         # Schedule periodic sync
-        schedule.every(config.SYNC_INTERVAL).minutes.do(run_sync, args.type)
+        schedule.every(config.SYNC_INTERVAL).minutes.do(run_sync, args.type, store_code=store_filter)
         # Heartbeat every 5 minutes
         schedule.every(5).minutes.do(send_heartbeat)
 
@@ -1080,7 +1170,7 @@ def main():
             schedule.run_pending()
             time.sleep(30)
     else:
-        run_sync(args.type)
+        run_sync(args.type, store_code=store_filter)
         log.info("Sync completed")
 
 

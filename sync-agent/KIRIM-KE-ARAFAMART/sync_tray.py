@@ -80,6 +80,27 @@ except ImportError:
     _missing_lib_error("python-dotenv")
 
 
+# ── Single-instance protection via Windows Mutex ────────────────
+# Pakai named mutex — lebih reliable dari lock file atau tasklist check.
+# Bisa jalan 2 store berbeda sekaligus (SM01 & ARM01) di PC yang sama.
+import ctypes as _ctypes
+_STORE_CODE_ENV = os.getenv("STORE_CODE", "DEFAULT")
+_MUTEX_NAME     = f"Global\\iPOS_SyncAgent_{_STORE_CODE_ENV}"
+_mutex_handle   = _ctypes.windll.kernel32.CreateMutexW(None, True, _MUTEX_NAME)
+if _ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+    try:
+        _ctypes.windll.user32.MessageBoxW(
+            0,
+            f"Sync Agent ({_STORE_CODE_ENV}) sudah berjalan!\n"
+            "Lihat icon di system tray (pojok kanan bawah layar).",
+            "Sync Agent — Sudah Aktif",
+            0x40,  # MB_ICONINFORMATION
+        )
+    except Exception:
+        pass
+    sys.exit(0)
+
+
 # ── Import modul sync ────────────────────────────────────────────
 try:
     sys.path.insert(0, str(BASE_DIR))
@@ -87,6 +108,10 @@ try:
     from sync_agent import run_sync
 except ImportError as e:
     _missing_lib_error(f"sync_agent/config — {e}")
+
+# STORE_CODE filter — dibaca dari .env, dikirim ke setiap run_sync call
+# Ini yang memastikan tray hanya sync toko sendiri, bukan semua toko
+_STORE_CODE = os.getenv("STORE_CODE") or None
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -184,9 +209,9 @@ def _do_sync(sync_type: str = "full"):
     """Jalankan satu siklus sync (blocking)."""
     if STATUS.stopped:
         return
-    logging.info(f"[TRAY] Mulai sync ({sync_type})...")
+    logging.info(f"[TRAY] Mulai sync ({sync_type}) store={_STORE_CODE or 'ALL'}...")
     try:
-        run_sync(sync_type)
+        run_sync(sync_type, store_code=_STORE_CODE)
         STATUS.ok()
         logging.info("[TRAY] Sync selesai.")
     except Exception as e:
@@ -245,7 +270,7 @@ def _monitor_loop(icon: pystray.Icon):
         if not LOG_FILE.exists():
             continue
         try:
-            with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+            with open(LOG_FILE, "r", encoding="utf-8", errors="ignore") as f:
                 f.seek(last_pos)
                 new_lines = f.readlines()
                 last_pos  = f.tell()

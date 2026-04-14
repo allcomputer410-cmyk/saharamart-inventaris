@@ -44,31 +44,33 @@ def _fix_stdout_utf8():
     """Paksa stdout/stderr Windows ke UTF-8 agar nama produk special chars aman."""
     try:
         if hasattr(sys.stdout, 'reconfigure'):
-            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+            sys.stdout.reconfigure(encoding='utf-8', errors='ignore')
         elif hasattr(sys.stdout, 'buffer'):
             sys.stdout = _io.TextIOWrapper(
-                sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True
+                sys.stdout.buffer, encoding='utf-8', errors='ignore', line_buffering=True
             )
     except Exception:
         pass
     try:
         if hasattr(sys.stderr, 'reconfigure'):
-            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+            sys.stderr.reconfigure(encoding='utf-8', errors='ignore')
         elif hasattr(sys.stderr, 'buffer'):
             sys.stderr = _io.TextIOWrapper(
-                sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True
+                sys.stderr.buffer, encoding='utf-8', errors='ignore', line_buffering=True
             )
     except Exception:
         pass
 
 _fix_stdout_utf8()
 
+# Format log dengan STORE_CODE agar mudah dibaca saat multi-toko
+_STORE_TAG = f"[{config.STORE_CODE}]" if config.STORE_CODE else "[ALL]"
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL, logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format=f"%(asctime)s [%(levelname)s] {_STORE_TAG} %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("sync_agent.log", encoding="utf-8", errors="replace"),
+        logging.FileHandler("sync_agent.log", encoding="utf-8", errors="ignore"),
     ],
 )
 log = logging.getLogger("sync_agent")
@@ -207,7 +209,7 @@ def safe_str(val, fallback: str = "") -> str:
     if val is None:
         return fallback
     if isinstance(val, bytes):
-        return val.decode("utf-8", errors="replace")
+        return val.decode("utf-8", errors="ignore")
     try:
         return str(val)
     except Exception:
@@ -302,6 +304,7 @@ def sync_products(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str)
         WHERE statushapus IS NULL
            OR statushapus = ''
            OR statushapus = 'N'
+           OR statushapus = '0'
         ORDER BY kodeitem
     """)
     ipos_items = cur.fetchall()
@@ -399,7 +402,10 @@ def sync_stock(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str) ->
                     ELSE i.stokmin END AS stokmin
         FROM tbl_item i
         LEFT JOIN tbl_itemstok s ON s.kodeitem = i.kodeitem AND s.kantor = %s
-        WHERE (i.statushapus = '0' OR i.statushapus IS NULL)
+        WHERE (i.statushapus IS NULL
+           OR i.statushapus = ''
+           OR i.statushapus = 'N'
+           OR i.statushapus = '0')
     """, (kodekantor,))
     ipos_stock = cur.fetchall()
     cur.close()
@@ -415,6 +421,25 @@ def sync_stock(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str) ->
     })
     prod_map = {p["ipos_kodeitem"]: p["id"] for p in products if p.get("ipos_kodeitem")}
 
+    def _lookup_stock(kode: str) -> Optional[str]:
+        """Lookup store_product_id dengan normalisasi leading zero."""
+        if not kode:
+            return None
+        pid = prod_map.get(kode) or prod_map.get(kode.upper())
+        if pid:
+            return pid
+        stripped = kode.lstrip('0')
+        if stripped and stripped != kode:
+            pid = prod_map.get(stripped) or prod_map.get(stripped.upper())
+            if pid:
+                return pid
+        padded = kode.zfill(13)
+        if padded != kode:
+            pid = prod_map.get(padded) or prod_map.get(padded.upper())
+            if pid:
+                return pid
+        return None
+
     # Get existing stock records (select_all: bypass 1000-row limit)
     existing_stock = sb.select_all("stock", {
         "store_id": f"eq.{store_id}",
@@ -429,10 +454,9 @@ def sync_stock(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str) ->
 
     for row in ipos_stock:
         kode = str(row["kodeitem"]).strip()
-        if kode not in prod_map:
+        sp_id = _lookup_stock(kode)
+        if not sp_id:
             continue
-
-        sp_id = prod_map[kode]
         new_qty = dec(row.get("stok"))
         min_qty = dec(row.get("stokmin"))
 
@@ -514,37 +538,58 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
         cur.close()
         return 0
 
-    # Get product mapping — daftarkan SEMUA varian key agar lookup lebih robust
+    # Get product mapping — hanya exact key, normalisasi dilakukan saat lookup
+    # Mendaftarkan variant (lstrip/zfill) di sini justru menyebabkan produk
+    # saling overwrite satu sama lain di dict (root cause skipped items).
     products = sb.select_all("store_products", {
         "store_id": f"eq.{store_id}",
         "select": "id,ipos_kodeitem,barcode,hpp",
     })
     prod_map: dict = {}
-    prod_map_upper: dict = {}
-
-    def _register(key: str, p: dict):
-        """Daftarkan key dan semua variannya ke prod_map."""
-        if not key:
-            return
-        prod_map[key] = p
-        prod_map_upper[key.upper()] = p
-        # Varian tanpa leading zero (misal: "089686598025" → "89686598025")
-        stripped = key.lstrip('0')
-        if stripped and stripped != key:
-            prod_map[stripped] = p
-            prod_map_upper[stripped.upper()] = p
-        # Varian zero-padded ke 13 digit EAN (misal: "89686598025" → "089686598025")
-        padded = key.zfill(13)
-        if padded != key:
-            prod_map[padded] = p
-            prod_map_upper[padded.upper()] = p
 
     for p in products:
-        # Daftarkan ipos_kodeitem DAN barcode sebagai key (keduanya, bukan salah satu)
-        _register(str(p.get("ipos_kodeitem") or "").strip(), p)
-        _register(str(p.get("barcode") or "").strip(), p)
+        kode = str(p.get("ipos_kodeitem") or "").strip()
+        if kode:
+            prod_map[kode] = p
+        barcode = str(p.get("barcode") or "").strip()
+        if barcode and barcode not in prod_map:
+            prod_map[barcode] = p
 
-    log.info(f"Product map: {len(prod_map)} keys (dari {len(products)} produk di store_products)")
+    null_count = sum(
+        1 for p in products
+        if not str(p.get("ipos_kodeitem") or "").strip()
+        and not str(p.get("barcode") or "").strip()
+    )
+    log.info(
+        f"Product map: {len(prod_map)} keys "
+        f"(dari {len(products)} produk, {null_count} tanpa kode/barcode)"
+    )
+
+    def _lookup_prod(kode: str) -> Optional[dict]:
+        """Cari produk dengan normalisasi bertahap — tanpa memodifikasi prod_map."""
+        if not kode:
+            return None
+        # 1. Exact match
+        p = prod_map.get(kode)
+        if p:
+            return p
+        # 2. Uppercase
+        p = prod_map.get(kode.upper())
+        if p:
+            return p
+        # 3. Tanpa leading zero (misal "089686010824" → "89686010824")
+        stripped = kode.lstrip('0')
+        if stripped and stripped != kode:
+            p = prod_map.get(stripped) or prod_map.get(stripped.upper())
+            if p:
+                return p
+        # 4. Zero-padded ke 13 digit EAN (misal "89686010824" → "0089686010824")
+        padded = kode.zfill(13)
+        if padded != kode:
+            p = prod_map.get(padded) or prod_map.get(padded.upper())
+            if p:
+                return p
+        return None
 
     now = datetime.utcnow().isoformat()
     count = 0
@@ -577,8 +622,7 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
         skipped_kode_samples = []
         for item in items:
             kode = str(item["kodeitem"]).strip()
-            # Semua varian sudah didaftarkan saat build map — cukup exact + uppercase
-            prod = prod_map.get(kode) or prod_map_upper.get(kode.upper())
+            prod = _lookup_prod(kode)
             if not prod:
                 skipped += 1
                 if len(skipped_kode_samples) < 5:
@@ -1013,6 +1057,11 @@ def _run_sync_inner(sync_type: str = "full", store_code: str = None):
     if store_code:
         store_params["code"] = f"eq.{store_code}"
     stores = sb.select("stores", store_params)
+
+    # Python-side filter — belt and suspenders, cegah store lain masuk
+    # walau filter API gagal atau STORE_CODE di Supabase tidak match case
+    if store_code:
+        stores = [s for s in stores if s['code'] == store_code]
 
     if not stores:
         log.warning("No active stores found")

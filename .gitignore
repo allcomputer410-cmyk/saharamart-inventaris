@@ -56,3 +56,5 @@ sync-agent/*.spec
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.vercel

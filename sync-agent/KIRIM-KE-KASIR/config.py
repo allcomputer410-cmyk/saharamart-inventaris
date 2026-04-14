@@ -27,5 +27,11 @@ SYNC_INTERVAL = int(os.getenv("SYNC_INTERVAL", "15"))
 # Set ke 90 atau 365 untuk re-sync data historis pertama kali
 SALES_DAYS_BACK = int(os.getenv("SALES_DAYS_BACK", "30"))
 
+# Filter toko: jika diisi, sync agent hanya akan sync toko dengan code ini.
+# Contoh: STORE_CODE=SM01  → hanya Saharamart
+#         STORE_CODE=ARM01 → hanya Arafamart
+#         (kosong)         → sync semua toko aktif
+STORE_CODE = os.getenv("STORE_CODE", "")
+
 # Log level
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

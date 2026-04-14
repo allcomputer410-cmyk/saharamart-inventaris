@@ -1,0 +1,84 @@
+╔══════════════════════════════════════════════════════╗
+║     SYNC AGENT iPOS — ARAFAMART (ARM01)             ║
+║     Panduan Pemasangan (3 Langkah)                  ║
+╚══════════════════════════════════════════════════════╝
+
+Sync Agent adalah program kecil yang berjalan diam-diam
+di background PC kasir. Tugasnya mengirim data iPOS ke
+server cloud setiap 2 menit, tanpa mengganggu kasir.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+LANGKAH 1 — INSTALL (sekali saja)
+───────────────────────────────────
+  Double-click: 1_INSTALL.bat
+  Tunggu sampai selesai.
+
+LANGKAH 2 — JALANKAN
+──────────────────────
+  Double-click: 2_JALANKAN.bat
+  Icon  akan muncul di pojok kanan bawah layar.
+
+  Klik kanan icon untuk:
+  ┌─────────────────────────────────┐
+  │ ✦ Sync Sekarang  → sync manual  │
+  │ ● Lihat Status   → cek kondisi  │
+  │ ≡ Buka Log       → lihat detail │
+  │ ✕ Keluar         → stop sync    │
+  └─────────────────────────────────┘
+
+  Warna icon:
+    HIJAU  = sync berjalan normal
+    MERAH  = ada error / koneksi terputus
+    KUNING = sedang proses sync
+
+LANGKAH 3 — AUTO-START (agar aktif otomatis)
+──────────────────────────────────────────────
+  Klik KANAN: 3_AUTOSTART.bat → "Run as administrator"
+  Setelah ini, Sync Agent aktif otomatis setiap PC menyala.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+OPSIONAL — Buat file .exe (tidak butuh Python)
+────────────────────────────────────────────────
+  Double-click: BUILD_EXE.bat
+  Hasil: folder dist\SyncAgent-ARAFAMART\SyncAgent.exe
+  File .exe bisa dijalankan di PC manapun tanpa Python.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+KONFIGURASI ARAFAMART (sudah diisi)
+─────────────────────────────────────
+  iPOS DB Host : 127.0.0.1
+  iPOS DB Port : 5444
+  iPOS DB Name : i4_arafahmart
+  iPOS User    : admin
+  Store Code   : ARM01
+  Interval     : 2 menit
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+JIKA ADA MASALAH
+─────────────────
+  - Buka file: sync_agent.log (log aktivitas sync)
+  - Atau klik kanan icon tray → Buka Log
+  - Cek halaman "Sync Monitor" di aplikasi inventaris
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ISI FOLDER INI
+──────────────
+  BACA DULU.txt          ← File ini (panduan)
+  1_INSTALL.bat          ← Langkah 1: install library
+  2_JALANKAN.bat         ← Langkah 2: jalankan tray
+  3_AUTOSTART.bat        ← Langkah 3: auto-start
+  BUILD_EXE.bat          ← Opsional: buat .exe
+  .env                   ← Konfigurasi (jangan dihapus!)
+  sync_tray.py           ← Program tray utama
+  sync_agent.py          ← Program sync iPOS
+  config.py              ← Modul konfigurasi
+  requirements.txt       ← Daftar library Python
+  run_silent.vbs         ← Background launcher
+  sync_agent.log         ← Log aktivitas (dibuat otomatis)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
