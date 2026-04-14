@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic';
 
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Users, Plus, Pencil, X, Loader2, ToggleLeft, ToggleRight, ShieldCheck } from 'lucide-react';
+import { Users, Plus, Pencil, X, Loader2, ToggleLeft, ToggleRight, ShieldCheck, Trash2, Mail } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -55,7 +55,15 @@ export default function UsersPage() {
   const [showModal, setShowModal] = useState(false);
   const [editUser, setEditUser] = useState<UserProfile | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
   const [currentUserRole, setCurrentUserRole] = useState<UserRole | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+
+  const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3500);
+  };
 
   // Form
   const [formName, setFormName] = useState('');
@@ -76,6 +84,7 @@ export default function UsersPage() {
         .eq('id', user.id)
         .single();
       if (profile) setCurrentUserRole((profile as { role: UserRole }).role);
+      setCurrentUserId(user.id);
     }
     checkAuth();
   }, [supabase]);
@@ -120,33 +129,46 @@ export default function UsersPage() {
 
   const handleSave = async () => {
     if (!formName.trim()) return;
+    if (!editUser && !formEmail.trim()) {
+      showToast('Email wajib diisi untuk user baru', 'error');
+      return;
+    }
     setSaving(true);
     try {
-      const userData = {
-        name: formName.trim(),
-        email: formEmail || null,
-        role: formRole,
-        store_id: formRole === 'direktur' ? null : (formStore || null),
-        phone: formPhone || null,
-      };
-
       if (editUser) {
-        await supabase.from('user_profiles').update(userData).eq('id', editUser.id);
+        // Edit: update user_profiles saja
+        const { error } = await supabase.from('user_profiles').update({
+          name: formName.trim(),
+          email: formEmail || null,
+          role: formRole,
+          store_id: formRole === 'direktur' ? null : (formStore || null),
+          phone: formPhone || null,
+        }).eq('id', editUser.id);
+        if (error) { showToast('Gagal menyimpan: ' + error.message, 'error'); return; }
+        showToast('User berhasil diupdate');
       } else {
-        // Buat user baru — dalam implementasi penuh ini akan invite via Supabase Auth
-        // Untuk sekarang, insert langsung ke user_profiles dengan id sementara
-        await supabase.from('user_profiles').insert([{
-          ...userData,
-          is_active: true,
-          feature_enabled: false,
-        }]);
+        // User baru: invite via Supabase Auth + buat user_profiles
+        const res = await fetch('/api/users/invite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: formEmail.trim(),
+            name: formName.trim(),
+            role: formRole,
+            store_id: formRole === 'direktur' ? null : (formStore || null),
+            phone: formPhone || null,
+          }),
+        });
+        const data = await res.json();
+        if (!data.success) { showToast('Gagal undang user: ' + data.error, 'error'); return; }
+        showToast(`Undangan dikirim ke ${formEmail}`);
       }
 
       setShowModal(false);
       resetForm();
       fetchUsers();
     } catch (err) {
-      console.error(err);
+      showToast('Terjadi kesalahan: ' + (err instanceof Error ? err.message : 'Unknown'), 'error');
     } finally {
       setSaving(false);
     }
@@ -157,6 +179,24 @@ export default function UsersPage() {
   const handleToggleActive = async (user: UserProfile) => {
     await supabase.from('user_profiles').update({ is_active: !user.is_active }).eq('id', user.id);
     fetchUsers();
+  };
+
+  // ─── Delete User ──────────────────────────────────────────────────────────────
+
+  const handleDelete = async (user: UserProfile) => {
+    if (!confirm(`Hapus user "${user.name}"? Akun ini tidak dapat dipulihkan.`)) return;
+    setDeletingId(user.id);
+    try {
+      const res = await fetch(`/api/users/invite?id=${user.id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!data.success) { showToast('Gagal hapus: ' + data.error, 'error'); return; }
+      showToast(`User "${user.name}" berhasil dihapus`);
+      fetchUsers();
+    } catch (err) {
+      showToast('Terjadi kesalahan: ' + (err instanceof Error ? err.message : 'Unknown'), 'error');
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   // ─── Render ───────────────────────────────────────────────────────────────────
@@ -174,6 +214,13 @@ export default function UsersPage() {
 
   return (
     <div className="space-y-4">
+      {/* Toast */}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-white transition-all ${toast.type === 'success' ? 'bg-green-600' : 'bg-red-600'}`}>
+          {toast.msg}
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-gray-800">Manajemen User</h1>
@@ -206,7 +253,7 @@ export default function UsersPage() {
                   <th className="px-4 py-3 text-left font-medium text-gray-600">Role</th>
                   <th className="px-4 py-3 text-left font-medium text-gray-600">Toko</th>
                   <th className="px-4 py-3 text-center font-medium text-gray-600">Status</th>
-                  <th className="px-4 py-3 text-center font-medium text-gray-600">Aksi</th>
+                  <th className="px-4 py-3 text-center font-medium text-gray-600" colSpan={2}>Aksi</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -232,6 +279,20 @@ export default function UsersPage() {
                         <Pencil className="w-4 h-4" />
                       </button>
                     </td>
+                    <td className="px-4 py-3 text-center">
+                      {user.id !== currentUserId && (
+                        <button
+                          onClick={() => handleDelete(user)}
+                          disabled={deletingId === user.id}
+                          className="text-gray-400 hover:text-red-600 transition-colors disabled:opacity-50"
+                        >
+                          {deletingId === user.id
+                            ? <Loader2 className="w-4 h-4 animate-spin" />
+                            : <Trash2 className="w-4 h-4" />
+                          }
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -241,9 +302,12 @@ export default function UsersPage() {
       </div>
 
       {/* Info box */}
-      <div className="bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 text-sm text-blue-700">
-        <p className="font-medium mb-1">Catatan Undang User Baru</p>
-        <p className="text-xs">Untuk mengundang user baru via email, gunakan Supabase Dashboard &rarr; Authentication &rarr; Invite User, lalu assign role di halaman ini.</p>
+      <div className="bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 text-sm text-blue-700 flex items-start gap-2">
+        <Mail className="w-4 h-4 mt-0.5 shrink-0" />
+        <div>
+          <p className="font-medium mb-0.5">Cara Menambah User</p>
+          <p className="text-xs">Klik &quot;Tambah User&quot;, isi email dan role, lalu klik Undang. User akan menerima email undangan untuk mengatur password dan login.</p>
+        </div>
       </div>
 
       {/* Modal */}
@@ -263,8 +327,20 @@ export default function UsersPage() {
                 <input type="text" value={formName} onChange={(e) => setFormName(e.target.value)} className="input-field" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                <input type="email" value={formEmail} onChange={(e) => setFormEmail(e.target.value)} className="input-field" />
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Email {!editUser && <span className="text-red-500">*</span>}
+                </label>
+                <input
+                  type="email"
+                  value={formEmail}
+                  onChange={(e) => setFormEmail(e.target.value)}
+                  className="input-field"
+                  placeholder={!editUser ? 'Wajib — untuk login & undangan' : ''}
+                  disabled={!!editUser}
+                />
+                {editUser && (
+                  <p className="text-xs text-gray-400 mt-1">Email tidak dapat diubah setelah akun dibuat.</p>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Role *</label>
@@ -293,9 +369,13 @@ export default function UsersPage() {
 
             <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200">
               <button onClick={() => { setShowModal(false); resetForm(); }} className="btn-secondary" disabled={saving}>Batal</button>
-              <button onClick={handleSave} disabled={saving || !formName.trim()} className="btn-primary flex items-center gap-2">
+              <button
+                onClick={handleSave}
+                disabled={saving || !formName.trim() || (!editUser && !formEmail.trim())}
+                className="btn-primary flex items-center gap-2"
+              >
                 {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-                {editUser ? 'Simpan' : 'Tambah'}
+                {saving ? (editUser ? 'Menyimpan...' : 'Mengundang...') : (editUser ? 'Simpan' : 'Kirim Undangan')}
               </button>
             </div>
           </div>

@@ -29,7 +29,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { label: 'Dashboard Global', href: '/dashboard', icon: LayoutDashboard },
-  { label: 'Manajemen User', href: '/users', icon: Users, disabled: true, badge: 'Segera' },
+  { label: 'Manajemen User', href: '/users', icon: Users },
   { label: 'Sync Monitor', href: '/sync', icon: RefreshCw },
   { label: 'Audit Log', href: '/audit', icon: Shield },
 ];
