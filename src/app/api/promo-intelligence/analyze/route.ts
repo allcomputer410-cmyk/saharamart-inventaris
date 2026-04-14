@@ -131,13 +131,13 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
     .eq('store_id', storeId)
     .gte('sale_date', thirtyDaysAgoStr);
 
-  let avgTransaction = 50000; // fallback
+  let _avgTransaction = 50000; // fallback (dipakai untuk estimasi store-level)
   const dailySaleIds: string[] = [];
   const saleDateById: Record<string, string> = {};
   if (dailySalesData && dailySalesData.length > 0) {
     const totalRev = dailySalesData.reduce((s: number, d: { total_revenue: number }) => s + (d.total_revenue || 0), 0);
     const totalTxn = dailySalesData.reduce((s: number, d: { total_transactions: number }) => s + (d.total_transactions || 0), 0);
-    if (totalTxn > 0) avgTransaction = totalRev / totalTxn;
+    if (totalTxn > 0) _avgTransaction = totalRev / totalTxn;
     dailySalesData.forEach((ds: { id: string; sale_date: string }) => {
       dailySaleIds.push(ds.id);
       saleDateById[ds.id] = ds.sale_date;
@@ -198,19 +198,80 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
   const sellingProductCount = products.filter(p => !!saleAggMap[p.id]).length;
   const avgDailyQtyPerProduct = sellingProductCount > 0 ? storeAvgDailyQty / sellingProductCount : 0;
 
-  // Total HPP for store margin calculation
-  let totalRevenue30 = 0;
-  let totalHpp30 = 0;
-  products.forEach((p) => {
-    const agg = saleAggMap[p.id];
-    if (agg) {
-      totalRevenue30 += agg.total_revenue;
-      totalHpp30 += agg.total_qty * p.hpp;
-    }
-  });
-  const storeMarginPct = totalRevenue30 > 0
-    ? ((totalRevenue30 - totalHpp30) / totalRevenue30) * 100
-    : 20; // fallback 20%
+  // ── Fetch produk yang sudah approved (skip duplikasi) dan baru ditolak (cooldown 7 hari)
+  const sevenDaysAgo = new Date(today);
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const approvedProductIds = new Set<string>();
+  const rejectedCooldownIds = new Set<string>();
+  {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: decisions } = await (supabase as any)
+      .from('promo_recommendations')
+      .select('store_product_id, status, rejected_at')
+      .eq('store_id', storeId)
+      .in('status', ['approved', 'rejected']);
+    (decisions || []).forEach((d: { store_product_id: string; status: string; rejected_at: string | null }) => {
+      if (d.status === 'approved') {
+        approvedProductIds.add(d.store_product_id);
+      } else if (d.status === 'rejected' && d.rejected_at && new Date(d.rejected_at) >= sevenDaysAgo) {
+        rejectedCooldownIds.add(d.store_product_id);
+      }
+    });
+  }
+
+  // ── Helper: hitung params DISCOUNT dengan guard minimum 10% margin pada harga promo
+  // Rumus: promoPrice >= hpp/0.9 agar (promoPrice-hpp)/promoPrice >= 10%
+  const makeDiscount = (sp: number, h: number, mp: number, stock: number, pname: string) => {
+    const maxD = Math.max(0, (1 - h / (0.9 * sp)) * 100); // max disc agar margin promo ≥ 10%
+    if (maxD < 5) return null; // tidak bisa beri diskon ≥5% sambil jaga margin 10%
+    const d = Math.round(Math.min(Math.max((mp - 10) / 2, 5), maxD) * 10) / 10;
+    const pp = sp * (1 - d / 100);
+    const pProfit = pp - h;
+    const mpp = pProfit / pp * 100;
+    return {
+      promoType: 'discount' as const,
+      params: {
+        nama_promo: `Diskon ${Math.round(d)}% - ${pname}`,
+        discount_pct: d,
+        promo_price: Math.round(pp),
+        profit_per_pcs: Math.round(pProfit),
+        margin_promo_pct: Math.round(mpp * 10) / 10,
+        margin_normal_pct: Math.round(mp * 10) / 10,
+        ...(mpp < 10 ? { margin_warning: true } : {}),
+      },
+      estRevenue: Math.max(0, Math.round(stock * pp)),
+      estProfit: Math.max(0, Math.round(stock * pProfit)),
+      lossIfNoPromo: stock * h,
+    };
+  };
+
+  // ── Helper: hitung params FLASH SALE dengan guard minimum 5% margin pada harga flash
+  const makeFlash = (sp: number, h: number, mp: number, adq: number, pname: string) => {
+    const rawD = (mp - 10) / 2; // sisa ruang di atas 10% margin, bagi dua
+    const d = Math.round(Math.min(Math.max(rawD, 5), 30) * 10) / 10;
+    const fp = sp * (1 - d / 100);
+    const mfp = (fp - h) / fp * 100;
+    if (mfp < 5) return null; // margin terlalu tipis bahkan di diskon terkecil
+    const quota = Math.max(Math.ceil(adq * 2), 5);
+    return {
+      promoType: 'flash_sale' as const,
+      params: {
+        nama_promo: `Flash Sale - ${pname}`,
+        flash_discount_pct: d,
+        flash_price: Math.round(fp),
+        kuota_per_hari: quota,
+        jam_mulai: '10:00',
+        jam_selesai: '12:00',
+        durasi_hari: 7,
+        margin_flash_pct: Math.round(mfp * 10) / 10,
+        margin_normal_pct: Math.round(mp * 10) / 10,
+        ...(mfp < 10 ? { margin_warning: true } : {}),
+      },
+      estRevenue: Math.max(0, Math.round(quota * 7 * fp)),
+      estProfit: Math.max(0, Math.round(quota * 7 * (fp - h))),
+      lossIfNoPromo: 0,
+    };
+  };
 
   const recommendations: Recommendation[] = [];
   const analyzedAt = new Date().toISOString();
@@ -218,42 +279,52 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
   for (const product of products) {
     const { id: spId, name, barcode, hpp, sell_price, category_id, current_qty } = product;
 
-    // Skip if no pricing info
+    // ── Guard: dedup approved + cooldown 7 hari rejected
+    if (approvedProductIds.has(spId)) continue;
+    if (rejectedCooldownIds.has(spId)) continue;
+
+    // ── Guard: data quality — skip data kotor dari iPOS
     if (hpp <= 0 || sell_price <= 0) continue;
+    if (sell_price <= hpp) continue; // jual ≤ beli: data kotor, jangan proses
 
     const marginPct = ((sell_price - hpp) / sell_price) * 100;
-    if (marginPct < 5) continue;
+    if (marginPct < 5) continue; // margin terlalu kecil untuk promo apapun
 
     const agg = saleAggMap[spId];
     const lastSaleDate = agg?.last_sale_date || null;
     // Default daysNoSale:
     // - Jika produk tidak ada di saleAggMap (tidak pernah terjual) → 31 (dead stock)
-    // - Jika noSaleData global → 31
     // - Jika ada agg tapi belum ada lastSaleDate → 30 (fallback netral)
-    let daysNoSale = (!agg || noSaleData) ? 31 : 30;
+    let daysNoSale = !agg ? 31 : 30;
     if (lastSaleDate) {
       const last = new Date(lastSaleDate);
       daysNoSale = Math.floor((today.getTime() - last.getTime()) / (1000 * 60 * 60 * 24));
     }
     const avgDailyQty = agg ? agg.total_qty / 30 : 0;
 
-    // Determine condition
-    // isDeadStock: tidak terjual > 30 hari ATAU produk tidak ada di data penjualan sama sekali
+    // ── Condition flags
+    // isDeadStock: tidak terjual >30 hari ATAU produk tidak ada di data penjualan sama sekali
     const isDeadStock = daysNoSale > 30 || !agg;
-    // isSlowStock: rata-rata harian < 1 pcs/hari — sama persis dengan definisi tab Slow Moving
-    // di Trend & Analisis (avgDailySold < 1) agar kedua sistem searah dan konsisten
+    // isSlowStock: rata-rata harian <1 pcs/hari — konsisten dengan tab Trend & Analisis
     const isSlowStock = !isDeadStock && avgDailyQty > 0 && avgDailyQty < 1;
+    // isHighMargin: margin >35% → kandidat BXGY
     const isHighMargin = marginPct > 35;
+    // isStagnant: belum terjual 14-30 hari (bukan dead), margin cukup → Flash Sale
+    const isStagnant = !isDeadStock && !isSlowStock && daysNoSale >= 14 && marginPct > 15;
 
-    if (!isDeadStock && !isSlowStock && !(isHighMargin && daysNoSale >= 7)) continue;
+    // Skip produk yang tidak memenuhi kondisi apapun
+    if (!isDeadStock && !isSlowStock && !(isHighMargin && daysNoSale >= 7) && !isStagnant) continue;
 
-    // Determine priority
+    // ── Priority
     let priority = 'optional';
-    if (isDeadStock) priority = 'urgent';
-    else if (daysNoSale >= 14 || avgDailyQty < avgDailyQtyPerProduct * 0.3) priority = 'suggested';
-    else if (daysNoSale >= 7 && marginPct > 35) priority = 'optional';
+    if (isDeadStock) {
+      priority = 'urgent';
+    } else if (daysNoSale >= 14 || avgDailyQty < avgDailyQtyPerProduct * 0.3) {
+      priority = 'suggested';
+    } else if (daysNoSale >= 7 && isHighMargin) {
+      priority = 'optional';
+    }
 
-    // Determine promo type and calculate params
     let promoType = 'discount';
     let params: Record<string, unknown> = {};
     let estRevenue = 0;
@@ -262,160 +333,130 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
     let reason = '';
 
     if (isDeadStock) {
-      // DEAD STOCK → DISCOUNT
-      promoType = 'discount';
-      const maxDiscountPct = ((sell_price - hpp * 1.05) / sell_price) * 100;
-      let discountPct = Math.min((marginPct - 5) / 2, marginPct - 5);
-      discountPct = Math.min(discountPct, maxDiscountPct);
-      discountPct = Math.max(discountPct, 5);
-      const promoPrice = sell_price * (1 - discountPct / 100);
-      const profitPerPcs = promoPrice - hpp;
-      const marginPromoPct = profitPerPcs / promoPrice * 100;
-      estRevenue = current_qty * promoPrice;
-      estProfit = current_qty * profitPerPcs;
-      lossIfNoPromo = current_qty * hpp;
-      params = {
-        nama_promo: `Diskon ${Math.round(discountPct)}% - ${name}`,
-        discount_pct: Math.round(discountPct * 10) / 10,
-        promo_price: Math.round(promoPrice),
-        profit_per_pcs: Math.round(profitPerPcs),
-        margin_promo_pct: Math.round(marginPromoPct * 10) / 10,
-        margin_normal_pct: Math.round(marginPct * 10) / 10,
-      };
+      // ── DEAD STOCK → DISCOUNT
+      const r = makeDiscount(sell_price, hpp, marginPct, current_qty, name);
+      if (!r) continue; // tidak bisa beri diskon aman → skip
+      promoType = r.promoType; params = r.params;
+      estRevenue = r.estRevenue; estProfit = r.estProfit; lossIfNoPromo = r.lossIfNoPromo;
       reason = `Tidak terjual ${daysNoSale} hari. Stok ${current_qty} pcs berisiko dead stock.`;
 
-    } else if (isSlowStock && marginPct > 20 && category_id) {
-      // SLOW STOCK with category → try BUNDLE
-      promoType = 'bundle';
-      const bundleDiscount = 0.12;
-      const bundlePrice = sell_price * 2 * (1 - bundleDiscount);
-      const totalHppBundle = hpp * 2;
-      const profitBundle = bundlePrice - totalHppBundle;
-      const marginBundlePct = profitBundle / bundlePrice * 100;
+    } else if (isSlowStock) {
+      // ── SLOW STOCK → BUNDLE / FLASH SALE / DISCOUNT
+      if (marginPct > 20 && category_id && current_qty >= 10) {
+        // Coba BUNDLE dulu
+        const bundleDiscPct = 0.12;
+        const bundlePrice = sell_price * 2 * (1 - bundleDiscPct);
+        const totalHppBundle = hpp * 2;
+        const profitBundle = bundlePrice - totalHppBundle;
+        const marginBundlePct = profitBundle / bundlePrice * 100;
 
-      if (marginBundlePct >= 5) {
-        estRevenue = (current_qty / 2) * bundlePrice;
-        estProfit = (current_qty / 2) * profitBundle;
-        params = {
-          nama_promo: `Bundle 2x ${name}`,
-          bundle_price: Math.round(bundlePrice),
-          bundle_qty: 2,
-          bundle_discount_pct: bundleDiscount * 100,
-          profit_per_bundle: Math.round(profitBundle),
-          margin_bundle_pct: Math.round(marginBundlePct * 10) / 10,
-          margin_normal_pct: Math.round(marginPct * 10) / 10,
-        };
-        reason = `Penjualan lambat (${avgDailyQty.toFixed(1)} pcs/hari). Bundle bisa meningkatkan volume.`;
+        if (marginBundlePct >= 5) {
+          promoType = 'bundle';
+          params = {
+            nama_promo: `Bundle 2x ${name}`,
+            bundle_price: Math.round(bundlePrice),
+            bundle_qty: 2,
+            bundle_discount_pct: bundleDiscPct * 100,
+            profit_per_bundle: Math.round(profitBundle),
+            margin_bundle_pct: Math.round(marginBundlePct * 10) / 10,
+            margin_normal_pct: Math.round(marginPct * 10) / 10,
+            ...(marginBundlePct < 10 ? { margin_warning: true } : {}),
+          };
+          estRevenue = Math.max(0, Math.round((current_qty / 2) * bundlePrice));
+          estProfit = Math.max(0, Math.round((current_qty / 2) * profitBundle));
+          reason = `Penjualan lambat (${avgDailyQty.toFixed(1)} pcs/hari). Bundle bisa meningkatkan volume.`;
+        } else {
+          // Bundle margin terlalu tipis → fallback Flash Sale
+          const fr = makeFlash(sell_price, hpp, marginPct, avgDailyQty, name);
+          if (fr) {
+            promoType = fr.promoType; params = fr.params;
+            estRevenue = fr.estRevenue; estProfit = fr.estProfit; lossIfNoPromo = fr.lossIfNoPromo;
+            reason = `Penjualan lambat (${avgDailyQty.toFixed(1)} pcs/hari). Flash sale untuk percepat perputaran stok.`;
+          } else {
+            const dr = makeDiscount(sell_price, hpp, marginPct, current_qty, name);
+            if (!dr) continue;
+            promoType = dr.promoType; params = dr.params;
+            estRevenue = dr.estRevenue; estProfit = dr.estProfit; lossIfNoPromo = dr.lossIfNoPromo;
+            reason = `Penjualan lambat (${avgDailyQty.toFixed(1)} pcs/hari). Diskon untuk percepat perputaran.`;
+          }
+        }
+      } else if (marginPct > 15) {
+        // Slow stock tanpa bundle conditions → FLASH SALE (sebelumnya silently dibuang — fixed)
+        const fr = makeFlash(sell_price, hpp, marginPct, avgDailyQty, name);
+        if (fr) {
+          promoType = fr.promoType; params = fr.params;
+          estRevenue = fr.estRevenue; estProfit = fr.estProfit; lossIfNoPromo = fr.lossIfNoPromo;
+          reason = `Penjualan lambat (${avgDailyQty.toFixed(1)} pcs/hari). Flash sale untuk menarik pembeli.`;
+        } else {
+          const dr = makeDiscount(sell_price, hpp, marginPct, current_qty, name);
+          if (!dr) continue;
+          promoType = dr.promoType; params = dr.params;
+          estRevenue = dr.estRevenue; estProfit = dr.estProfit; lossIfNoPromo = dr.lossIfNoPromo;
+          reason = `Penjualan lambat (${avgDailyQty.toFixed(1)} pcs/hari). Diskon untuk percepat perputaran.`;
+        }
       } else {
-        // Fallback to DISCOUNT
-        promoType = 'discount';
-        const maxDiscountPct = ((sell_price - hpp * 1.05) / sell_price) * 100;
-        let discountPct = Math.min((marginPct - 5) / 2, marginPct - 5);
-        discountPct = Math.min(discountPct, maxDiscountPct);
-        discountPct = Math.max(discountPct, 5);
-        const promoPrice = sell_price * (1 - discountPct / 100);
-        const profitPerPcs = promoPrice - hpp;
-        const marginPromoPct = profitPerPcs / promoPrice * 100;
-        estRevenue = current_qty * promoPrice;
-        estProfit = current_qty * profitPerPcs;
-        params = {
-          nama_promo: `Diskon ${Math.round(discountPct)}% - ${name}`,
-          discount_pct: Math.round(discountPct * 10) / 10,
-          promo_price: Math.round(promoPrice),
-          profit_per_pcs: Math.round(profitPerPcs),
-          margin_promo_pct: Math.round(marginPromoPct * 10) / 10,
-          margin_normal_pct: Math.round(marginPct * 10) / 10,
-        };
+        // Margin rendah → DISCOUNT
+        const dr = makeDiscount(sell_price, hpp, marginPct, current_qty, name);
+        if (!dr) continue;
+        promoType = dr.promoType; params = dr.params;
+        estRevenue = dr.estRevenue; estProfit = dr.estProfit; lossIfNoPromo = dr.lossIfNoPromo;
         reason = `Penjualan lambat (${avgDailyQty.toFixed(1)} pcs/hari). Diskon untuk percepat perputaran.`;
       }
 
     } else if (isHighMargin && daysNoSale >= 7) {
-      // HIGH MARGIN → BXGY or FLASH SALE
-      if (marginPct > 35) {
+      // ── HIGH MARGIN → BXGY
+      let buyQty = 3;
+      let freeQty = 1;
+      if (marginPct > 50) { buyQty = 2; freeQty = 1; }
+
+      const profitPerSet = (buyQty * sell_price) - ((buyQty + freeQty) * hpp);
+      const marginEfektif = profitPerSet / (buyQty * sell_price) * 100;
+
+      if (marginEfektif >= 5) {
         promoType = 'bxgy';
-        let buyQty = 3;
-        let freeQty = 1;
-        if (marginPct > 50) { buyQty = 2; freeQty = 1; }
-
-        const profitPerSet = (buyQty * sell_price) - ((buyQty + freeQty) * hpp);
-        const marginEfektif = profitPerSet / (buyQty * sell_price) * 100;
-
-        if (marginEfektif >= 0) {
-          estRevenue = (current_qty / (buyQty + freeQty)) * buyQty * sell_price;
-          estProfit = (current_qty / (buyQty + freeQty)) * profitPerSet;
-          params = {
-            nama_promo: `Beli ${buyQty} Gratis ${freeQty} - ${name}`,
-            buy_qty: buyQty,
-            free_qty: freeQty,
-            profit_per_set: Math.round(profitPerSet),
-            margin_efektif_pct: Math.round(marginEfektif * 10) / 10,
-            margin_normal_pct: Math.round(marginPct * 10) / 10,
-          };
-          reason = `Margin tinggi (${marginPct.toFixed(0)}%). Program Beli ${buyQty} Gratis ${freeQty} untuk meningkatkan volume.`;
+        params = {
+          nama_promo: `Beli ${buyQty} Gratis ${freeQty} - ${name}`,
+          buy_qty: buyQty,
+          free_qty: freeQty,
+          profit_per_set: Math.round(profitPerSet),
+          margin_efektif_pct: Math.round(marginEfektif * 10) / 10,
+          margin_normal_pct: Math.round(marginPct * 10) / 10,
+          ...(marginEfektif < 10 ? { margin_warning: true } : {}),
+        };
+        estRevenue = Math.max(0, Math.round((current_qty / (buyQty + freeQty)) * buyQty * sell_price));
+        estProfit = Math.max(0, Math.round((current_qty / (buyQty + freeQty)) * profitPerSet));
+        lossIfNoPromo = 0;
+        reason = `Margin tinggi (${marginPct.toFixed(0)}%). Beli ${buyQty} Gratis ${freeQty} untuk meningkatkan volume.`;
+      } else {
+        // BXGY tidak aman → Flash Sale
+        const fr = makeFlash(sell_price, hpp, marginPct, avgDailyQty, name);
+        if (fr) {
+          promoType = fr.promoType; params = fr.params;
+          estRevenue = fr.estRevenue; estProfit = fr.estProfit; lossIfNoPromo = fr.lossIfNoPromo;
+          reason = `Margin tinggi namun penjualan melambat. Flash sale untuk meningkatkan traffic.`;
         } else {
-          // Fallback to DISCOUNT
-          promoType = 'discount';
-          const maxDiscountPct = ((sell_price - hpp * 1.05) / sell_price) * 100;
-          let discountPct = Math.min((marginPct - 5) / 2, marginPct - 5);
-          discountPct = Math.min(discountPct, maxDiscountPct);
-          discountPct = Math.max(discountPct, 5);
-          const promoPrice = sell_price * (1 - discountPct / 100);
-          const profitPerPcs = promoPrice - hpp;
-          const marginPromoPct = profitPerPcs / promoPrice * 100;
-          estRevenue = current_qty * promoPrice;
-          estProfit = current_qty * profitPerPcs;
-          params = {
-            nama_promo: `Diskon ${Math.round(discountPct)}% - ${name}`,
-            discount_pct: Math.round(discountPct * 10) / 10,
-            promo_price: Math.round(promoPrice),
-            profit_per_pcs: Math.round(profitPerPcs),
-            margin_promo_pct: Math.round(marginPromoPct * 10) / 10,
-            margin_normal_pct: Math.round(marginPct * 10) / 10,
-          };
+          const dr = makeDiscount(sell_price, hpp, marginPct, current_qty, name);
+          if (!dr) continue;
+          promoType = dr.promoType; params = dr.params;
+          estRevenue = dr.estRevenue; estProfit = dr.estProfit; lossIfNoPromo = dr.lossIfNoPromo;
           reason = `Margin tinggi namun penjualan mulai melambat.`;
         }
-      } else {
-        // FLASH SALE
-        promoType = 'flash_sale';
-        const flashDiscount = Math.min((marginPct - 5) / 2, 20);
-        const flashPrice = sell_price * (1 - flashDiscount / 100);
-        const kuotaPerHari = Math.max(avgDailyQty * 2, 10);
-        estRevenue = kuotaPerHari * 7 * flashPrice;
-        estProfit = kuotaPerHari * 7 * (flashPrice - hpp);
-        const marginFlashPct = (flashPrice - hpp) / flashPrice * 100;
-        params = {
-          nama_promo: `Flash Sale - ${name}`,
-          flash_discount_pct: Math.round(flashDiscount * 10) / 10,
-          flash_price: Math.round(flashPrice),
-          kuota_per_hari: Math.round(kuotaPerHari),
-          jam_mulai: '10:00',
-          jam_selesai: '12:00',
-          durasi_hari: 7,
-          margin_flash_pct: Math.round(marginFlashPct * 10) / 10,
-          margin_normal_pct: Math.round(marginPct * 10) / 10,
-        };
-        reason = `Flash sale untuk meningkatkan traffic di jam sepi (10:00–12:00).`;
       }
-    } else if (!isDeadStock && !isSlowStock) {
-      // MIN PURCHASE for store-wide
-      promoType = 'min_purchase';
-      const threshold = avgTransaction * 1.3;
-      const discountNom = avgTransaction * 0.08;
-      const storeRevTxnCount = totalRevenue30 > 0 && avgTransaction > 0 ? totalRevenue30 / avgTransaction : 0;
-      const storeMarginTotal = totalRevenue30 * storeMarginPct / 100;
-      estProfit = storeMarginTotal - storeRevTxnCount * discountNom;
-      estRevenue = totalRevenue30 * 1.1; // estimated 10% uplift
-      params = {
-        nama_promo: `Min Belanja ${Math.round(threshold / 1000) * 1000} Diskon ${Math.round(discountNom / 1000) * 1000}`,
-        min_purchase: Math.round(threshold / 1000) * 1000,
-        discount_nom: Math.round(discountNom / 1000) * 1000,
-        avg_transaction: Math.round(avgTransaction),
-        store_margin_pct: Math.round(storeMarginPct * 10) / 10,
-      };
-      reason = `Program min belanja untuk meningkatkan rata-rata transaksi toko.`;
-      lossIfNoPromo = 0;
+
     } else {
-      continue;
+      // ── STAGNANT (daysNoSale 14-30, bukan dead/slow) → FLASH SALE
+      const fr = makeFlash(sell_price, hpp, marginPct, avgDailyQty, name);
+      if (fr) {
+        promoType = fr.promoType; params = fr.params;
+        estRevenue = fr.estRevenue; estProfit = fr.estProfit; lossIfNoPromo = fr.lossIfNoPromo;
+        reason = `Tidak terjual ${daysNoSale} hari. Flash sale untuk mempertahankan momentum penjualan.`;
+      } else {
+        const dr = makeDiscount(sell_price, hpp, marginPct, current_qty, name);
+        if (!dr) continue;
+        promoType = dr.promoType; params = dr.params;
+        estRevenue = dr.estRevenue; estProfit = dr.estProfit; lossIfNoPromo = dr.lossIfNoPromo;
+        reason = `Tidak terjual ${daysNoSale} hari. Diskon ringan untuk mempertahankan momentum.`;
+      }
     }
 
     recommendations.push({
@@ -432,8 +473,8 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
       current_stock: current_qty,
       days_no_sale: daysNoSale,
       params,
-      est_revenue: Math.max(0, Math.round(estRevenue)),
-      est_profit: Math.max(0, Math.round(estProfit)),
+      est_revenue: estRevenue,
+      est_profit: estProfit,
       loss_if_no_promo: Math.max(0, Math.round(lossIfNoPromo)),
       analyzed_at: analyzedAt,
     });

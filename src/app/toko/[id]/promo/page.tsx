@@ -312,6 +312,12 @@ export default function PromoPage() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Hapus promo ini?')) return;
+    // Reset rekomendasi yang terhubung ke promo ini → kembali ke pending
+    // (promotion_id akan di-set NULL otomatis oleh ON DELETE SET NULL setelah delete)
+    await supabase
+      .from('promo_recommendations')
+      .update({ status: 'pending', approved_at: null })
+      .eq('promotion_id', id);
     await supabase.from('promotions').delete().eq('id', id);
     fetchPromos();
   };

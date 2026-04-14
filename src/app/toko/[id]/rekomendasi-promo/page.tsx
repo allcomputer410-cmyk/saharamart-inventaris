@@ -348,6 +348,14 @@ function RecommendationCard({
         </div>
       )}
 
+      {/* Margin warning — tampil di view mode ketika margin promo tipis */}
+      {!isEditing && rec.params.margin_warning === true && marginPct > 0 && (
+        <div className="flex items-center gap-2 bg-yellow-50 text-yellow-700 border border-yellow-200 px-3 py-2 rounded-lg text-xs">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          Margin promo tipis ({marginPct.toFixed(1)}%) — pastikan stok habis agar tidak rugi
+        </div>
+      )}
+
       {/* Action buttons */}
       <div className="flex gap-2 pt-1">
         {isEditing ? (
@@ -549,10 +557,10 @@ export default function RekomendasiPromoPage() {
         is_bundle_item: rec.promo_type === 'bundle',
       }]);
 
-      // Update recommendation status
+      // Update recommendation status + simpan promotion_id untuk link balik
       await supabase
         .from('promo_recommendations')
-        .update({ status: 'approved', approved_at: new Date().toISOString() })
+        .update({ status: 'approved', approved_at: new Date().toISOString(), promotion_id: promoId })
         .eq('id', rec.id);
 
       setRecs((prev) => prev.filter((r) => r.id !== rec.id));
@@ -836,6 +844,7 @@ export default function RekomendasiPromoPage() {
           )}
         </>
       )}
+
     </div>
   );
 }
