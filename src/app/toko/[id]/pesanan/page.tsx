@@ -1540,7 +1540,7 @@ function PesananContent() {
                                 const itemStatus = item.status === 'cancelled'
                                   ? { label: 'Kosong', class: 'badge-danger' }
                                   : (STATUS_LABELS[item.status] || STATUS_LABELS.pending);
-                                const isItemLoading = actionLoading === item.id;
+                                const _isItemLoading = actionLoading === item.id;
                                 return (
                                   <tr key={item.id} className="hover:bg-gray-50">
                                     <td className="table-cell">
