@@ -4,11 +4,14 @@ export const dynamic = 'force-dynamic';
 
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Users, Plus, Pencil, X, Loader2, ToggleLeft, ToggleRight, ShieldCheck, Trash2, Mail } from 'lucide-react';
+import {
+  Users, Plus, Pencil, X, Loader2, ToggleLeft, ToggleRight,
+  ShieldCheck, Trash2, Mail, Shield, CheckSquare, Square,
+} from 'lucide-react';
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-type UserRole = 'direktur' | 'gm' | 'supervisor' | 'admin_gudang';
+type UserRole = 'direktur' | 'owner' | 'manajer' | 'gm' | 'supervisor' | 'admin_gudang';
 
 interface UserProfile {
   id: string;
@@ -19,6 +22,7 @@ interface UserProfile {
   phone: string | null;
   is_active: boolean;
   feature_enabled: boolean;
+  permissions: string[] | null;
   store?: { id: string; name: string; code: string };
 }
 
@@ -30,8 +34,12 @@ interface StoreOption {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
+const MANAGER_ROLES: UserRole[] = ['direktur', 'owner', 'manajer'];
+
 const ROLE_LABELS: Record<UserRole, string> = {
   direktur: 'Direktur',
+  owner: 'Owner',
+  manajer: 'Manajer',
   gm: 'General Manager',
   supervisor: 'Supervisor',
   admin_gudang: 'Admin Gudang',
@@ -39,10 +47,49 @@ const ROLE_LABELS: Record<UserRole, string> = {
 
 const ROLE_COLORS: Record<UserRole, string> = {
   direktur: 'bg-purple-100 text-purple-700',
+  owner: 'bg-red-100 text-red-700',
+  manajer: 'bg-indigo-100 text-indigo-700',
   gm: 'bg-blue-100 text-blue-700',
   supervisor: 'bg-teal-100 text-teal-700',
   admin_gudang: 'bg-orange-100 text-orange-700',
 };
+
+// Daftar fitur yang bisa di-toggle per akun
+const FEATURE_GROUPS: { label: string; features: { key: string; label: string }[] }[] = [
+  {
+    label: 'Operasional Toko',
+    features: [
+      { key: 'dashboard', label: 'Dashboard Toko' },
+      { key: 'master_produk', label: 'Master Produk' },
+      { key: 'supplier', label: 'Daftar Supplier' },
+      { key: 'cek_stok', label: 'Cek Stok' },
+      { key: 'pesanan', label: 'Pesanan & Penerimaan' },
+      { key: 'pembelian', label: 'Pembelian Masuk' },
+      { key: 'rekap_supplier', label: 'Rekap Supplier' },
+      { key: 'history', label: 'History' },
+    ],
+  },
+  {
+    label: 'Keuangan & Analitik',
+    features: [
+      { key: 'penjualan', label: 'Penjualan' },
+      { key: 'rekap_kasir', label: 'Rekap Kasir' },
+      { key: 'analisis_keuangan', label: 'Analisis Keuangan' },
+      { key: 'trend', label: 'Trend & Analisis' },
+      { key: 'promo', label: 'Promo' },
+    ],
+  },
+  {
+    label: 'Global',
+    features: [
+      { key: 'dashboard_global', label: 'Dashboard Global' },
+      { key: 'sync_monitor', label: 'Sync Monitor' },
+      { key: 'audit_log', label: 'Audit Log' },
+    ],
+  },
+];
+
+const ALL_FEATURE_KEYS = FEATURE_GROUPS.flatMap(g => g.features.map(f => f.key));
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -65,14 +112,16 @@ export default function UsersPage() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  // Form
+  // ─── Form state ──────────────────────────────────────────────────────────────
   const [formName, setFormName] = useState('');
   const [formEmail, setFormEmail] = useState('');
   const [formRole, setFormRole] = useState<UserRole>('supervisor');
   const [formStore, setFormStore] = useState('');
   const [formPhone, setFormPhone] = useState('');
+  // null = akses penuh, string[] = fitur yang diizinkan
+  const [formPermissions, setFormPermissions] = useState<string[] | null>(null);
 
-  // ─── Auth check: hanya direktur boleh akses ─────────────────────────────────
+  // ─── Auth check: direktur, owner, manajer boleh akses ────────────────────────
 
   useEffect(() => {
     async function checkAuth() {
@@ -89,7 +138,7 @@ export default function UsersPage() {
     checkAuth();
   }, [supabase]);
 
-  // ─── Fetch ──────────────────────────────────────────────────────────────────
+  // ─── Fetch ────────────────────────────────────────────────────────────────────
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
@@ -108,11 +157,11 @@ export default function UsersPage() {
 
   useEffect(() => { fetchUsers(); fetchStores(); }, [fetchUsers, fetchStores]);
 
-  // ─── Form Helpers ────────────────────────────────────────────────────────────
+  // ─── Form Helpers ─────────────────────────────────────────────────────────────
 
   const resetForm = () => {
     setFormName(''); setFormEmail(''); setFormRole('supervisor');
-    setFormStore(''); setFormPhone(''); setEditUser(null);
+    setFormStore(''); setFormPhone(''); setFormPermissions(null); setEditUser(null);
   };
 
   const openEdit = (user: UserProfile) => {
@@ -122,10 +171,18 @@ export default function UsersPage() {
     setFormRole(user.role);
     setFormStore(user.store_id || '');
     setFormPhone(user.phone || '');
+    setFormPermissions(user.permissions ?? null);
     setShowModal(true);
   };
 
-  // ─── Save ────────────────────────────────────────────────────────────────────
+  const toggleFeature = (key: string) => {
+    setFormPermissions(prev => {
+      if (prev === null) return ALL_FEATURE_KEYS.filter(k => k !== key);
+      return prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key];
+    });
+  };
+
+  // ─── Save ─────────────────────────────────────────────────────────────────────
 
   const handleSave = async () => {
     if (!formName.trim()) return;
@@ -135,29 +192,24 @@ export default function UsersPage() {
     }
     setSaving(true);
     try {
+      const payload = {
+        name: formName.trim(),
+        email: formEmail || null,
+        role: formRole,
+        store_id: ['direktur', 'owner'].includes(formRole) ? null : (formStore || null),
+        phone: formPhone || null,
+        permissions: formPermissions,
+      };
+
       if (editUser) {
-        // Edit: update user_profiles saja
-        const { error } = await supabase.from('user_profiles').update({
-          name: formName.trim(),
-          email: formEmail || null,
-          role: formRole,
-          store_id: formRole === 'direktur' ? null : (formStore || null),
-          phone: formPhone || null,
-        }).eq('id', editUser.id);
+        const { error } = await supabase.from('user_profiles').update(payload).eq('id', editUser.id);
         if (error) { showToast('Gagal menyimpan: ' + error.message, 'error'); return; }
         showToast('User berhasil diupdate');
       } else {
-        // User baru: invite via Supabase Auth + buat user_profiles
         const res = await fetch('/api/users/invite', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: formEmail.trim(),
-            name: formName.trim(),
-            role: formRole,
-            store_id: formRole === 'direktur' ? null : (formStore || null),
-            phone: formPhone || null,
-          }),
+          body: JSON.stringify({ ...payload, email: formEmail.trim() }),
         });
         const data = await res.json();
         if (!data.success) { showToast('Gagal undang user: ' + data.error, 'error'); return; }
@@ -177,8 +229,9 @@ export default function UsersPage() {
   // ─── Toggle Active ────────────────────────────────────────────────────────────
 
   const handleToggleActive = async (user: UserProfile) => {
-    await supabase.from('user_profiles').update({ is_active: !user.is_active }).eq('id', user.id);
-    fetchUsers();
+    const { error } = await supabase.from('user_profiles').update({ is_active: !user.is_active }).eq('id', user.id);
+    if (!error) fetchUsers();
+    else showToast('Gagal mengubah status', 'error');
   };
 
   // ─── Delete User ──────────────────────────────────────────────────────────────
@@ -201,16 +254,17 @@ export default function UsersPage() {
 
   // ─── Render ───────────────────────────────────────────────────────────────────
 
-  // Direktur-only check
-  if (currentUserRole !== null && currentUserRole !== 'direktur') {
+  if (currentUserRole !== null && !MANAGER_ROLES.includes(currentUserRole)) {
     return (
       <div className="card text-center py-16">
         <ShieldCheck className="w-12 h-12 text-gray-300 mx-auto mb-3" />
         <h3 className="text-lg font-semibold text-gray-700 mb-2">Akses Ditolak</h3>
-        <p className="text-sm text-gray-500">Hanya Direktur yang dapat mengakses halaman ini.</p>
+        <p className="text-sm text-gray-500">Hanya Direktur, Owner, dan Manajer yang dapat mengakses halaman ini.</p>
       </div>
     );
   }
+
+  const isRestrictedMode = formPermissions !== null;
 
   return (
     <div className="space-y-4">
@@ -224,7 +278,7 @@ export default function UsersPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-gray-800">Manajemen User</h1>
-          <p className="text-sm text-gray-500 mt-1">Kelola akun dan role pengguna</p>
+          <p className="text-sm text-gray-500 mt-1">Kelola akun, role, dan akses fitur per pengguna</p>
         </div>
         <button onClick={() => { resetForm(); setShowModal(true); }} className="btn-primary flex items-center gap-2">
           <Plus className="w-4 h-4" />
@@ -252,49 +306,61 @@ export default function UsersPage() {
                   <th className="px-4 py-3 text-left font-medium text-gray-600">Email</th>
                   <th className="px-4 py-3 text-left font-medium text-gray-600">Role</th>
                   <th className="px-4 py-3 text-left font-medium text-gray-600">Toko</th>
+                  <th className="px-4 py-3 text-center font-medium text-gray-600">Akses Fitur</th>
                   <th className="px-4 py-3 text-center font-medium text-gray-600">Status</th>
                   <th className="px-4 py-3 text-center font-medium text-gray-600" colSpan={2}>Aksi</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {users.map((user) => (
-                  <tr key={user.id} className={`hover:bg-gray-50 ${!user.is_active ? 'opacity-50' : ''}`}>
-                    <td className="px-4 py-3 font-medium text-gray-800">{user.name}</td>
-                    <td className="px-4 py-3 text-gray-600 text-xs">{user.email || '—'}</td>
-                    <td className="px-4 py-3">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${ROLE_COLORS[user.role as UserRole] || 'bg-gray-100 text-gray-600'}`}>
-                        {ROLE_LABELS[user.role as UserRole] || user.role}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 text-xs">
-                      {user.store ? `${user.store.name} (${user.store.code})` : user.role === 'direktur' ? 'Semua Toko' : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <button onClick={() => handleToggleActive(user)} className="text-gray-500 hover:text-blue-600 transition-colors">
-                        {user.is_active ? <ToggleRight className="w-5 h-5 text-blue-600" /> : <ToggleLeft className="w-5 h-5" />}
-                      </button>
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <button onClick={() => openEdit(user)} className="text-gray-500 hover:text-blue-600 transition-colors">
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      {user.id !== currentUserId && (
-                        <button
-                          onClick={() => handleDelete(user)}
-                          disabled={deletingId === user.id}
-                          className="text-gray-400 hover:text-red-600 transition-colors disabled:opacity-50"
-                        >
-                          {deletingId === user.id
-                            ? <Loader2 className="w-4 h-4 animate-spin" />
-                            : <Trash2 className="w-4 h-4" />
-                          }
+                {users.map((user) => {
+                  const perms = user.permissions;
+                  return (
+                    <tr key={user.id} className={`hover:bg-gray-50 ${!user.is_active ? 'opacity-50' : ''}`}>
+                      <td className="px-4 py-3 font-medium text-gray-800">{user.name}</td>
+                      <td className="px-4 py-3 text-gray-600 text-xs">{user.email || '—'}</td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${ROLE_COLORS[user.role as UserRole] || 'bg-gray-100 text-gray-600'}`}>
+                          {ROLE_LABELS[user.role as UserRole] || user.role}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-600 text-xs">
+                        {user.store ? `${user.store.name} (${user.store.code})` : ['direktur', 'owner'].includes(user.role) ? 'Semua Toko' : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {perms === null || perms === undefined
+                          ? <span className="text-xs text-green-600 font-medium">Akses Penuh</span>
+                          : <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
+                              <Shield className="w-3 h-3" />{perms.length} fitur
+                            </span>
+                        }
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <button onClick={() => handleToggleActive(user)} className="text-gray-500 hover:text-blue-600 transition-colors">
+                          {user.is_active ? <ToggleRight className="w-5 h-5 text-blue-600" /> : <ToggleLeft className="w-5 h-5" />}
                         </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <button onClick={() => openEdit(user)} className="text-gray-500 hover:text-blue-600 transition-colors">
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {user.id !== currentUserId && (
+                          <button
+                            onClick={() => handleDelete(user)}
+                            disabled={deletingId === user.id}
+                            className="text-gray-400 hover:text-red-600 transition-colors disabled:opacity-50"
+                          >
+                            {deletingId === user.id
+                              ? <Loader2 className="w-4 h-4 animate-spin" />
+                              : <Trash2 className="w-4 h-4" />
+                            }
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -306,26 +372,31 @@ export default function UsersPage() {
         <Mail className="w-4 h-4 mt-0.5 shrink-0" />
         <div>
           <p className="font-medium mb-0.5">Cara Menambah User</p>
-          <p className="text-xs">Klik &quot;Tambah User&quot;, isi email dan role, lalu klik Undang. User akan menerima email undangan untuk mengatur password dan login.</p>
+          <p className="text-xs">Klik &quot;Tambah User&quot;, isi email dan role, pilih fitur yang dapat diakses, lalu klik Kirim Undangan. User akan menerima email untuk mengatur password.</p>
         </div>
       </div>
 
-      {/* Modal */}
+      {/* ─── Modal ──────────────────────────────────────────────────────────────── */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
               <h2 className="text-lg font-bold text-gray-800">{editUser ? 'Edit User' : 'Tambah User'}</h2>
               <button onClick={() => { setShowModal(false); resetForm(); }} className="p-1 hover:bg-gray-100 rounded-lg">
                 <X className="w-5 h-5 text-gray-500" />
               </button>
             </div>
 
-            <div className="px-6 py-4 space-y-4">
+            {/* Body — scrollable */}
+            <div className="px-6 py-4 space-y-4 overflow-y-auto flex-1">
+              {/* Nama */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Nama *</label>
                 <input type="text" value={formName} onChange={(e) => setFormName(e.target.value)} className="input-field" />
               </div>
+
+              {/* Email */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Email {!editUser && <span className="text-red-500">*</span>}
@@ -338,10 +409,10 @@ export default function UsersPage() {
                   placeholder={!editUser ? 'Wajib — untuk login & undangan' : ''}
                   disabled={!!editUser}
                 />
-                {editUser && (
-                  <p className="text-xs text-gray-400 mt-1">Email tidak dapat diubah setelah akun dibuat.</p>
-                )}
+                {editUser && <p className="text-xs text-gray-400 mt-1">Email tidak dapat diubah setelah akun dibuat.</p>}
               </div>
+
+              {/* Role */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Role *</label>
                 <select value={formRole} onChange={(e) => setFormRole(e.target.value as UserRole)} className="input-field">
@@ -350,7 +421,9 @@ export default function UsersPage() {
                   ))}
                 </select>
               </div>
-              {formRole !== 'direktur' && (
+
+              {/* Toko */}
+              {!['direktur', 'owner'].includes(formRole) && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Toko</label>
                   <select value={formStore} onChange={(e) => setFormStore(e.target.value)} className="input-field">
@@ -361,13 +434,95 @@ export default function UsersPage() {
                   </select>
                 </div>
               )}
+
+              {/* No. Telepon */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">No. Telepon</label>
                 <input type="tel" value={formPhone} onChange={(e) => setFormPhone(e.target.value)} className="input-field" />
               </div>
+
+              {/* ── Pengaturan Akses Fitur ──────────────────────────────────── */}
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <div className="bg-gray-50 px-4 py-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800">Akses Fitur</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {isRestrictedMode
+                        ? `${formPermissions!.length} dari ${ALL_FEATURE_KEYS.length} fitur dipilih`
+                        : 'User dapat mengakses semua fitur'}
+                    </p>
+                  </div>
+                  {/* Toggle mode: Akses Penuh ↔ Pilih Manual */}
+                  <button
+                    type="button"
+                    onClick={() => setFormPermissions(isRestrictedMode ? null : [...ALL_FEATURE_KEYS])}
+                    className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ${
+                      isRestrictedMode
+                        ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                        : 'bg-green-100 text-green-700 hover:bg-green-200'
+                    }`}
+                  >
+                    {isRestrictedMode ? 'Dibatasi — klik untuk Akses Penuh' : 'Akses Penuh — klik untuk Dibatasi'}
+                  </button>
+                </div>
+
+                {isRestrictedMode && (
+                  <div className="px-4 py-3 space-y-4">
+                    {/* Tombol Pilih Semua / Hapus Semua */}
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFormPermissions([...ALL_FEATURE_KEYS])}
+                        className="text-xs text-blue-600 hover:underline flex items-center gap-1"
+                      >
+                        <CheckSquare className="w-3.5 h-3.5" />Pilih Semua
+                      </button>
+                      <span className="text-gray-300">|</span>
+                      <button
+                        type="button"
+                        onClick={() => setFormPermissions([])}
+                        className="text-xs text-gray-500 hover:underline flex items-center gap-1"
+                      >
+                        <Square className="w-3.5 h-3.5" />Hapus Semua
+                      </button>
+                    </div>
+
+                    {/* Checkbox groups */}
+                    {FEATURE_GROUPS.map((group) => (
+                      <div key={group.label}>
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{group.label}</p>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {group.features.map((feature) => {
+                            const checked = formPermissions!.includes(feature.key);
+                            return (
+                              <label
+                                key={feature.key}
+                                className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors text-sm ${
+                                  checked
+                                    ? 'bg-blue-50 border-blue-200 text-blue-800'
+                                    : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleFeature(feature.key)}
+                                  className="accent-blue-600 w-3.5 h-3.5 shrink-0"
+                                />
+                                <span className="truncate">{feature.label}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200">
+            {/* Footer */}
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200 shrink-0">
               <button onClick={() => { setShowModal(false); resetForm(); }} className="btn-secondary" disabled={saving}>Batal</button>
               <button
                 onClick={handleSave}

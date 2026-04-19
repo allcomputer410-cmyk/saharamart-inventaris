@@ -241,7 +241,6 @@ export default function MasterProdukPage() {
   };
 
   const handlePesanStok = () => {
-    // Store selected items in sessionStorage for the pesanan page to pick up
     const itemsToOrder = products
       .filter((p) => selectedItems.has(p.id))
       .map((p) => {
@@ -255,13 +254,12 @@ export default function MasterProdukPage() {
           current_qty: stock?.current_qty || 0,
           min_qty: stock?.min_qty || 0,
           max_qty: stock?.max_qty || 0,
-          suggested_qty: Math.max(0, (stock?.max_qty || 0) - (stock?.current_qty || 0)),
           supplier_id: p.supplier?.id || null,
           supplier_name: p.supplier?.name || null,
         };
       });
-    sessionStorage.setItem(`order_items_${storeId}`, JSON.stringify(itemsToOrder));
-    window.location.href = `/toko/${storeId}/cek-stok?from=master-produk`;
+    sessionStorage.setItem(`pesanan_prefill_${storeId}`, JSON.stringify(itemsToOrder));
+    window.location.href = `/toko/${storeId}/pesanan?from=master-produk`;
   };
 
   const getStockStatus = (stock: ProductRow['stock']) => {

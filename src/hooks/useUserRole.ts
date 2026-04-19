@@ -3,19 +3,28 @@ import { createClient } from '@/lib/supabase/client';
 
 // ─── Permission Matrix ────────────────────────────────────────────────────────
 
-export type UserRole = 'direktur' | 'gm' | 'supervisor' | 'admin_gudang';
+export type UserRole = 'direktur' | 'owner' | 'manajer' | 'gm' | 'supervisor' | 'admin_gudang';
 
 export type Permission =
   | 'view_hpp'
   | 'view_profit'
   | 'manage_settings'
+  | 'manage_users'
   | 'view_all_stores'
   | 'manage_orders'
   | 'warehouse_ops';
 
 const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   direktur: [
-    'view_hpp', 'view_profit', 'manage_settings',
+    'view_hpp', 'view_profit', 'manage_settings', 'manage_users',
+    'view_all_stores', 'manage_orders', 'warehouse_ops',
+  ],
+  owner: [
+    'view_hpp', 'view_profit', 'manage_settings', 'manage_users',
+    'view_all_stores', 'manage_orders', 'warehouse_ops',
+  ],
+  manajer: [
+    'view_hpp', 'view_profit', 'manage_settings', 'manage_users',
     'view_all_stores', 'manage_orders', 'warehouse_ops',
   ],
   gm: [

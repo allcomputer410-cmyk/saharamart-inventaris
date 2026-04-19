@@ -47,6 +47,31 @@ const ROLE_LABEL: Record<string, string> = {
   admin_gudang: 'Admin Gudang',
 };
 
+// Peta dari href-suffix ke permission key
+const MENU_PERMISSION_MAP: Record<string, string> = {
+  'dashboard':        'dashboard',
+  'master-produk':    'master_produk',
+  'supplier':         'supplier',
+  'cek-stok':         'cek_stok',
+  'pesanan':          'pesanan',
+  'pembelian-masuk':  'pembelian',
+  'rekap':            'rekap_supplier',
+  'history':          'history',
+  'trend':            'trend',
+  'penjualan':        'penjualan',
+  'rekap-kasir':      'rekap_kasir',
+  'analisis':         'analisis_keuangan',
+  'promo':                'promo',
+  'rekomendasi-promo':    'promo',
+};
+
+const GLOBAL_PERMISSION_MAP: Record<string, string> = {
+  '/dashboard':    'dashboard_global',
+  '/sync':         'sync_monitor',
+  '/audit':        'audit_log',
+  '/admin/users':  'manajemen_user',
+};
+
 interface SidebarProps {
   storeId: string;
   storeName: string;
@@ -57,6 +82,7 @@ interface SidebarProps {
   featurePromo?: boolean;
   featureGudang?: boolean;
   featureRoles?: boolean;
+  userPermissions?: string[] | null;
 }
 
 interface NavItem {
@@ -68,15 +94,26 @@ interface NavItem {
   allowedRoles?: string[]; // jika diisi, hanya role ini yang bisa akses
 }
 
-export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole = '', userName = '', featurePromo = false, featureGudang = false, featureRoles = false }: SidebarProps) {
+export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole = '', userName = '', featurePromo = false, featureGudang = false, featureRoles = false, userPermissions = null }: SidebarProps) {
   const pathname = usePathname();
 
-  // Role-based menu visibility
-  // Jika featureRoles = false: tampilkan semua (bypass semua role check)
-  // Jika featureRoles = true:
-  //   supervisor: sembunyikan Analisis Keuangan, Rekap Kasir
-  //   admin_gudang: sembunyikan Pesanan, Pembelian Masuk, Rekap, Analisis, Rekap Kasir
-  const isHidden = (menuLabel: string): boolean => {
+  // Per-user permissions: null = akses penuh, string[] = hanya keys yang boleh
+  const canAccessMenu = (href: string): boolean => {
+    if (userPermissions === null) return true;
+    // Cek global menus
+    if (GLOBAL_PERMISSION_MAP[href] !== undefined) {
+      return userPermissions.includes(GLOBAL_PERMISSION_MAP[href]);
+    }
+    // Cek store menus — ambil segmen terakhir dari href
+    const segment = href.split('/').pop() || '';
+    const key = MENU_PERMISSION_MAP[segment];
+    if (key) return userPermissions.includes(key);
+    return true; // tidak dikenal → tampilkan
+  };
+
+  // Role-based menu visibility (legacy — berlaku hanya jika tidak ada per-user permissions)
+  const isHiddenByRole = (menuLabel: string): boolean => {
+    if (userPermissions !== null) return false; // per-user override takes precedence
     if (!featureRoles) return false;
     if (userRole === 'supervisor') {
       return ['Analisis Keuangan', 'Rekap Kasir'].includes(menuLabel);
@@ -196,8 +233,8 @@ export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole 
               </p>
             </div>
             {storeNavItems.map((item) => {
-              // Sembunyikan menu berdasar role enforcement
-              if (isHidden(item.label)) return null;
+              if (isHiddenByRole(item.label)) return null;
+              if (!canAccessMenu(item.href)) return null;
               const isActive = pathname === item.href;
               const Icon = item.icon;
               // Cek apakah item punya pembatasan role
@@ -284,6 +321,7 @@ export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole 
               </p>
             </div>
             {globalNavItems.map((item) => {
+              if (!canAccessMenu(item.href)) return null;
               const isActive = pathname === item.href;
               const Icon = item.icon;
               return (

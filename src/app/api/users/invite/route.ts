@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { createServerSupabaseClient } from '@/lib/supabase/server';
+
+const ALLOWED_ROLES = ['direktur', 'owner', 'manajer'];
 
 function getAdminClient() {
   return createClient(
@@ -9,11 +12,37 @@ function getAdminClient() {
   );
 }
 
+async function verifyCallerRole(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const serverClient = createServerSupabaseClient();
+    const { data: { user } } = await serverClient.auth.getUser();
+    if (!user) return { ok: false, error: 'Tidak terautentikasi' };
+
+    const { data: profile } = await serverClient
+      .from('user_profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile || !ALLOWED_ROLES.includes(profile.role)) {
+      return { ok: false, error: 'Akses ditolak — hanya Direktur, Owner, atau Manajer' };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, error: 'Gagal memverifikasi sesi' };
+  }
+}
+
 // POST /api/users/invite — Kirim undangan email & buat user_profiles
 export async function POST(request: NextRequest) {
+  const auth = await verifyCallerRole();
+  if (!auth.ok) {
+    return NextResponse.json({ success: false, error: auth.error }, { status: 403 });
+  }
+
   try {
     const body = await request.json();
-    const { email, name, role, store_id, phone } = body;
+    const { email, name, role, store_id, phone, permissions } = body;
 
     if (!email || !name || !role) {
       return NextResponse.json({ success: false, error: 'email, name, dan role wajib diisi' }, { status: 400 });
@@ -38,10 +67,11 @@ export async function POST(request: NextRequest) {
       email,
       name: name.trim(),
       role,
-      store_id: role === 'direktur' ? null : (store_id || null),
+      store_id: ['direktur', 'owner'].includes(role) ? null : (store_id || null),
       phone: phone || null,
       is_active: true,
       feature_enabled: false,
+      permissions: permissions ?? null,
     }], { onConflict: 'id' });
 
     if (profileError) {
@@ -59,6 +89,11 @@ export async function POST(request: NextRequest) {
 
 // DELETE /api/users/invite?id=xxx — Hapus user dari Auth + user_profiles
 export async function DELETE(request: NextRequest) {
+  const auth = await verifyCallerRole();
+  if (!auth.ok) {
+    return NextResponse.json({ success: false, error: auth.error }, { status: 403 });
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const userId = searchParams.get('id');

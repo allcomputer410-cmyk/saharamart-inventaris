@@ -25,6 +25,7 @@ export default function StoreLayout({
   const [store, setStore] = useState<Store | null>(null);
   const [userRole, setUserRole] = useState<string>('');
   const [userName, setUserName] = useState<string>('');
+  const [userPermissions, setUserPermissions] = useState<string[] | null>(null);
 
   useEffect(() => {
     async function fetchData() {
@@ -38,11 +39,13 @@ export default function StoreLayout({
       if (user) {
         const { data: profile } = await supabase
           .from('user_profiles')
-          .select('name, role')
+          .select('name, role, permissions')
           .eq('id', user.id)
           .single();
         if (profile?.role) setUserRole(profile.role);
         if (profile?.name) setUserName(profile.name);
+        const p = (profile as { permissions?: string[] | null } | null)?.permissions;
+        setUserPermissions(p ?? null);
       }
     }
 
@@ -63,6 +66,7 @@ export default function StoreLayout({
           featurePromo={store?.feature_promo ?? false}
           featureGudang={store?.feature_gudang ?? false}
           featureRoles={store?.feature_roles ?? false}
+          userPermissions={userPermissions}
         />
       )}
 
