@@ -31,6 +31,7 @@ import {
   RotateCcw,
   Lightbulb,
   Palette,
+  Printer,
 } from 'lucide-react';
 
 // Role yang boleh akses menu bertanda restricted
@@ -65,6 +66,7 @@ const MENU_PERMISSION_MAP: Record<string, string> = {
   'promo':                'promo',
   'rekomendasi-promo':    'promo',
   'desain-promo':         'promo',
+  'cetak-label':          'master_produk',
 };
 
 const GLOBAL_PERMISSION_MAP: Record<string, string> = {
@@ -129,6 +131,7 @@ export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole 
   const storeNavItems: NavItem[] = [
     { label: 'Dashboard', href: `/toko/${storeId}/dashboard`, icon: LayoutDashboard },
     { label: 'Master Produk', href: `/toko/${storeId}/master-produk`, icon: Package },
+    { label: 'Cetak Label', href: `/toko/${storeId}/cetak-label`, icon: Printer },
     { label: 'Daftar Supplier', href: `/toko/${storeId}/supplier`, icon: Truck },
     { label: 'Cek Stok', href: `/toko/${storeId}/cek-stok`, icon: ClipboardCheck },
     { label: 'Pesanan', href: `/toko/${storeId}/pesanan`, icon: ShoppingCart },
