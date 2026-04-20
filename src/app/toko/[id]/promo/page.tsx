@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { formatRupiah } from '@/lib/utils';
 import {
@@ -178,7 +178,10 @@ function calcMarginDiscount(
 export default function PromoPage() {
   const params = useParams();
   const storeId = params.id as string;
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const supabase = createClient();
+  const prefillApplied = useRef(false);
 
   const [promos, setPromos] = useState<Promo[]>([]);
   const [products, setProducts] = useState<StoreProductOption[]>([]);
@@ -287,6 +290,35 @@ export default function PromoPage() {
 
   useEffect(() => { fetchPromos(); fetchProducts(); }, [fetchPromos, fetchProducts]);
   useEffect(() => { if (activeTab === 'performa') fetchDiscounts(); }, [activeTab, fetchDiscounts]);
+
+  // Pre-fill form dari URL query (dari tombol "Buat Promo Manual" di rekomendasi-promo)
+  useEffect(() => {
+    if (prefillApplied.current) return;
+    const productId   = searchParams.get('product_id');
+    const productName = searchParams.get('product_name');
+    const productBarcode = searchParams.get('product_barcode') || '';
+    const hpp         = parseFloat(searchParams.get('hpp') || '0');
+    const sellPrice   = parseFloat(searchParams.get('sell_price') || '0');
+    const promoType   = searchParams.get('promo_type') as PromoType | null;
+    if (!productId || !productName) return;
+    prefillApplied.current = true;
+    setFormType(promoType || 'discount');
+    setFormSelectedProducts([{
+      store_product_id: productId,
+      promo_price: null,
+      is_bundle_item: false,
+      store_product: {
+        id: productId,
+        barcode: productBarcode,
+        name: productName,
+        hpp,
+        sell_price: sellPrice,
+      },
+    }]);
+    setShowModal(true);
+    // Bersihkan query dari URL agar tidak re-trigger
+    router.replace(`/toko/${storeId}/promo`);
+  }, [searchParams, storeId, router]);
 
   // ─── Form Helpers ────────────────────────────────────────────────────────────
 

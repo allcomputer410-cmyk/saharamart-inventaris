@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { formatRupiah, formatDate } from '@/lib/utils';
 import {
@@ -20,6 +20,8 @@ import {
   Search,
   Tag,
   BarChart2,
+  RotateCcw,
+  ExternalLink,
 } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -50,6 +52,7 @@ interface PromoRecommendation {
   approved_at: string | null;
   rejected_at: string | null;
   created_at: string;
+  promotion_id: string | null;
 }
 
 interface DiscountInfo {
@@ -228,6 +231,7 @@ function RecommendationCard({
   onStartEdit,
   onSaveEdit,
   onEditParamChange,
+  onOpenPromoForm,
 }: {
   rec: PromoRecommendation;
   editingId: string | null;
@@ -238,6 +242,7 @@ function RecommendationCard({
   onStartEdit: (rec: PromoRecommendation) => void;
   onSaveEdit: (rec: PromoRecommendation) => void;
   onEditParamChange: (key: string, value: number) => void;
+  onOpenPromoForm: (rec: PromoRecommendation) => void;
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const isEditing = editingId === rec.id;
@@ -537,6 +542,17 @@ function RecommendationCard({
           </>
         )}
       </div>
+
+      {/* Shortcut: buat promo manual dari rekomendasi ini */}
+      <div className="border-t border-gray-100 pt-2">
+        <button
+          onClick={() => onOpenPromoForm(rec)}
+          className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+        >
+          <ExternalLink className="w-3 h-3" />
+          Buat Promo Manual (form lengkap)
+        </button>
+      </div>
     </div>
   );
 }
@@ -546,6 +562,7 @@ function RecommendationCard({
 export default function RekomendasiPromoPage() {
   const params = useParams();
   const storeId = params.id as string;
+  const router = useRouter();
   const supabase = createClient();
 
   const [recs, setRecs] = useState<PromoRecommendation[]>([]);
@@ -744,6 +761,29 @@ export default function RekomendasiPromoPage() {
       .eq('id', id);
     setRecs((prev) => prev.filter((r) => r.id !== id));
     showToast('Rekomendasi ditolak');
+  };
+
+  const handleRestore = async (id: string) => {
+    await supabase
+      .from('promo_recommendations')
+      .update({ status: 'pending', rejected_at: null, approved_at: null, promotion_id: null })
+      .eq('id', id);
+    setHistory((prev) => prev.filter((r) => r.id !== id));
+    await fetchRecs();
+    showToast('Rekomendasi dikembalikan ke Pending');
+  };
+
+  const handleOpenPromoForm = (rec: PromoRecommendation) => {
+    const q = new URLSearchParams({
+      product_id: rec.store_product_id,
+      product_name: rec.product_name,
+      product_barcode: rec.product_barcode || '',
+      hpp: String(rec.hpp),
+      sell_price: String(rec.sell_price),
+      promo_type: rec.promo_type,
+      rec_id: rec.id,
+    });
+    router.push(`/toko/${storeId}/promo?${q.toString()}`);
   };
 
   const handleStartEdit = (rec: PromoRecommendation) => {
@@ -962,6 +1002,7 @@ export default function RekomendasiPromoPage() {
                       onStartEdit={handleStartEdit}
                       onSaveEdit={handleSaveEdit}
                       onEditParamChange={handleEditParamChange}
+                      onOpenPromoForm={handleOpenPromoForm}
                     />
                   ))}
                 </div>
@@ -986,6 +1027,7 @@ export default function RekomendasiPromoPage() {
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Tipe Promo</th>
                         <th className="px-4 py-3 text-right font-medium text-gray-600">Est. Profit</th>
                         <th className="px-4 py-3 text-center font-medium text-gray-600">Status</th>
+                        <th className="px-4 py-3 text-center font-medium text-gray-600">Aksi</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -1018,6 +1060,16 @@ export default function RekomendasiPromoPage() {
                                 <XCircle className="w-3 h-3" /> Ditolak
                               </span>
                             )}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <button
+                              onClick={() => handleRestore(h.id)}
+                              title={h.status === 'rejected' ? 'Kembalikan ke Pending' : 'Reset ke Pending'}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-amber-700 bg-amber-50 border border-amber-200 hover:bg-amber-100 transition-colors"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                              {h.status === 'rejected' ? 'Kembalikan' : 'Reset'}
+                            </button>
                           </td>
                         </tr>
                       ))}
