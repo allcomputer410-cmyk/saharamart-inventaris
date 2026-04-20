@@ -17,6 +17,9 @@ import {
   Clock,
   ChevronDown,
   ChevronUp,
+  Search,
+  Tag,
+  BarChart2,
 } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -49,6 +52,22 @@ interface PromoRecommendation {
   created_at: string;
 }
 
+interface DiscountInfo {
+  ipos_iddiskon: string;
+  diskon1: number;
+  disknom1: number;
+  tgl_dari: string | null;
+  tgl_sampai: string | null;
+  jam_dari: string | null;
+  jam_sampai: string | null;
+}
+
+interface SalesRow {
+  sale_date: string;
+  total_qty: number;
+  total_revenue: number;
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const TYPE_LABELS: Record<PromoType, string> = {
@@ -74,6 +93,105 @@ const PRIORITY_CONFIG: Record<Priority, { label: string; color: string; dot: str
 };
 
 const PRIORITY_ORDER: Priority[] = ['urgent', 'suggested', 'optional'];
+
+// ─── Sales Comparison Panel ───────────────────────────────────────────────────
+
+function SalesComparisonPanel({
+  storeProductId,
+  discountInfo,
+}: {
+  storeProductId: string;
+  discountInfo: DiscountInfo;
+}) {
+  const supabase = createClient();
+  const [rows, setRows] = useState<{ before: SalesRow[]; during: SalesRow[] } | null>(null);
+  const [compLoading, setCompLoading] = useState(true);
+
+  useEffect(() => {
+    const fetch = async () => {
+      const tglDari = discountInfo.tgl_dari ? new Date(discountInfo.tgl_dari) : null;
+      if (!tglDari) { setCompLoading(false); return; }
+
+      const today = new Date();
+      const before7Start = new Date(tglDari);
+      before7Start.setDate(before7Start.getDate() - 7);
+
+      const [{ data: beforeData }, { data: duringData }] = await Promise.all([
+        supabase
+          .from('daily_sale_items')
+          .select('sale_date, total_qty, total_revenue')
+          .eq('store_product_id', storeProductId)
+          .gte('sale_date', before7Start.toISOString().split('T')[0])
+          .lt('sale_date', tglDari.toISOString().split('T')[0]),
+        supabase
+          .from('daily_sale_items')
+          .select('sale_date, total_qty, total_revenue')
+          .eq('store_product_id', storeProductId)
+          .gte('sale_date', tglDari.toISOString().split('T')[0])
+          .lte('sale_date', today.toISOString().split('T')[0]),
+      ]);
+
+      setRows({ before: beforeData || [], during: duringData || [] });
+      setCompLoading(false);
+    };
+    fetch();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeProductId, discountInfo.tgl_dari]);
+
+  const sumQty = (r: SalesRow[]) => r.reduce((s, x) => s + x.total_qty, 0);
+  const sumRev = (r: SalesRow[]) => r.reduce((s, x) => s + x.total_revenue, 0);
+
+  if (compLoading) return (
+    <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
+      <Loader2 className="w-3 h-3 animate-spin" /> Memuat data penjualan...
+    </div>
+  );
+
+  if (!rows) return null;
+
+  const beforeQty = sumQty(rows.before);
+  const duringQty = sumQty(rows.during);
+  const beforeRev = sumRev(rows.before);
+  const duringRev = sumRev(rows.during);
+  const qtyChange = beforeQty === 0 ? null : ((duringQty - beforeQty) / beforeQty * 100);
+  const revChange = beforeRev === 0 ? null : ((duringRev - beforeRev) / beforeRev * 100);
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-semibold text-gray-600 flex items-center gap-1">
+        <BarChart2 className="w-3.5 h-3.5 text-blue-500" />
+        Perbandingan Penjualan (Sebelum vs Selama Diskon)
+      </p>
+      <div className="grid grid-cols-2 gap-2 text-xs">
+        <div className="bg-gray-50 rounded-lg px-2 py-1.5">
+          <p className="text-gray-400">7 Hari Sebelum</p>
+          <p className="font-semibold text-gray-700">{beforeQty} pcs</p>
+          <p className="text-gray-500">{formatRupiah(beforeRev)}</p>
+        </div>
+        <div className="bg-blue-50 rounded-lg px-2 py-1.5">
+          <p className="text-blue-500">Selama Diskon</p>
+          <p className="font-semibold text-blue-700">{duringQty} pcs
+            {qtyChange !== null && (
+              <span className={`ml-1 text-xs font-normal ${qtyChange >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                ({qtyChange >= 0 ? '+' : ''}{qtyChange.toFixed(0)}%)
+              </span>
+            )}
+          </p>
+          <p className="text-blue-600">{formatRupiah(duringRev)}
+            {revChange !== null && (
+              <span className={`ml-1 text-xs ${revChange >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                ({revChange >= 0 ? '+' : ''}{revChange.toFixed(0)}%)
+              </span>
+            )}
+          </p>
+        </div>
+      </div>
+      {rows.before.length === 0 && rows.during.length === 0 && (
+        <p className="text-xs text-gray-400">Belum ada data penjualan tersinkron.</p>
+      )}
+    </div>
+  );
+}
 
 // ─── Margin Bar Component ─────────────────────────────────────────────────────
 
@@ -104,6 +222,7 @@ function RecommendationCard({
   rec,
   editingId,
   editParams,
+  discountInfo,
   onApprove,
   onReject,
   onStartEdit,
@@ -113,6 +232,7 @@ function RecommendationCard({
   rec: PromoRecommendation;
   editingId: string | null;
   editParams: Record<string, number>;
+  discountInfo?: DiscountInfo;
   onApprove: (rec: PromoRecommendation) => void;
   onReject: (id: string) => void;
   onStartEdit: (rec: PromoRecommendation) => void;
@@ -145,7 +265,15 @@ function RecommendationCard({
                 {TYPE_LABELS[rec.promo_type]}
               </span>
             </div>
-            <h3 className="font-semibold text-gray-800 mt-1 truncate">{rec.product_name}</h3>
+            <div className="flex items-center gap-1.5 flex-wrap mt-1">
+              <h3 className="font-semibold text-gray-800 truncate">{rec.product_name}</h3>
+              {discountInfo && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-orange-100 text-orange-700 text-xs font-medium rounded-full flex-shrink-0">
+                  <Tag className="w-3 h-3" />
+                  Diskon iPOS{discountInfo.diskon1 > 0 ? ` ${discountInfo.diskon1}%` : discountInfo.disknom1 > 0 ? ` -${formatRupiah(discountInfo.disknom1)}` : ''}
+                </span>
+              )}
+            </div>
             {rec.product_barcode && (
               <p className="text-xs text-gray-400">{rec.product_barcode}</p>
             )}
@@ -345,6 +473,14 @@ function RecommendationCard({
               <p className="font-semibold text-red-700">{formatRupiah(rec.loss_if_no_promo)}</p>
             </div>
           </div>
+
+          {/* Sales comparison — hanya untuk item yang sedang diskon di iPOS */}
+          {discountInfo && (
+            <SalesComparisonPanel
+              storeProductId={rec.store_product_id}
+              discountInfo={discountInfo}
+            />
+          )}
         </div>
       )}
 
@@ -419,10 +555,12 @@ export default function RekomendasiPromoPage() {
   const [activeTab, setActiveTab] = useState<'pending' | 'history'>('pending');
   const [filterPriority, setFilterPriority] = useState<'' | Priority>('');
   const [filterType, setFilterType] = useState<'' | PromoType>('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editParams, setEditParams] = useState<Record<string, number>>({});
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
   const [emptyReason, setEmptyReason] = useState<'no_sale_data' | 'all_normal' | null>(null);
+  const [discountMap, setDiscountMap] = useState<Record<string, DiscountInfo>>({});
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ msg, type });
@@ -456,7 +594,36 @@ export default function RekomendasiPromoPage() {
     setLoading(false);
   }, [storeId, supabase]);
 
-  useEffect(() => { fetchRecs(); }, [fetchRecs]);
+  const fetchDiscounts = useCallback(async () => {
+    const now = new Date().toISOString();
+    const { data } = await supabase
+      .from('store_item_discounts')
+      .select('store_product_id, ipos_iddiskon, diskon1, disknom1, tgl_dari, tgl_sampai, jam_dari, jam_sampai')
+      .eq('store_id', storeId)
+      .eq('is_active', true)
+      .or(`tgl_sampai.is.null,tgl_sampai.gte.${now}`)
+      .or(`tgl_dari.is.null,tgl_dari.lte.${now}`);
+
+    if (data) {
+      const map: Record<string, DiscountInfo> = {};
+      for (const d of data) {
+        if (d.store_product_id) {
+          map[d.store_product_id] = {
+            ipos_iddiskon: d.ipos_iddiskon,
+            diskon1: d.diskon1 ?? 0,
+            disknom1: d.disknom1 ?? 0,
+            tgl_dari: d.tgl_dari,
+            tgl_sampai: d.tgl_sampai,
+            jam_dari: d.jam_dari,
+            jam_sampai: d.jam_sampai,
+          };
+        }
+      }
+      setDiscountMap(map);
+    }
+  }, [storeId, supabase]);
+
+  useEffect(() => { fetchRecs(); fetchDiscounts(); }, [fetchRecs, fetchDiscounts]);
 
   const handleRefresh = async () => {
     setAnalyzing(true);
@@ -643,6 +810,10 @@ export default function RekomendasiPromoPage() {
   const filteredRecs = recs.filter((r) => {
     if (filterPriority && r.priority !== filterPriority) return false;
     if (filterType && r.promo_type !== filterType) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      if (!r.product_name.toLowerCase().includes(q) && !(r.product_barcode || '').toLowerCase().includes(q)) return false;
+    }
     return true;
   });
 
@@ -714,28 +885,41 @@ export default function RekomendasiPromoPage() {
           {activeTab === 'pending' && (
             <div className="space-y-4">
               {/* Filters */}
-              <div className="flex flex-wrap gap-2 items-center">
-                <div className="flex gap-1">
-                  {(['', 'urgent', 'suggested', 'optional'] as const).map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => setFilterPriority(p)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${filterPriority === p ? 'bg-purple-600 text-white border-purple-600' : 'text-gray-600 border-gray-300 hover:border-purple-400'}`}
-                    >
-                      {p === '' ? 'Semua' : PRIORITY_CONFIG[p as Priority].label}
-                    </button>
-                  ))}
+              <div className="space-y-2">
+                {/* Search bar */}
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Cari produk atau barcode..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="input-field pl-9 text-sm py-2 w-full"
+                  />
                 </div>
-                <select
-                  value={filterType}
-                  onChange={(e) => setFilterType(e.target.value as '' | PromoType)}
-                  className="input-field w-auto text-sm py-1.5"
-                >
-                  <option value="">Semua Tipe</option>
-                  {(Object.entries(TYPE_LABELS) as [PromoType, string][]).map(([k, v]) => (
-                    <option key={k} value={k}>{v}</option>
-                  ))}
-                </select>
+                <div className="flex flex-wrap gap-2 items-center">
+                  <div className="flex gap-1">
+                    {(['', 'urgent', 'suggested', 'optional'] as const).map((p) => (
+                      <button
+                        key={p}
+                        onClick={() => setFilterPriority(p)}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${filterPriority === p ? 'bg-purple-600 text-white border-purple-600' : 'text-gray-600 border-gray-300 hover:border-purple-400'}`}
+                      >
+                        {p === '' ? 'Semua' : PRIORITY_CONFIG[p as Priority].label}
+                      </button>
+                    ))}
+                  </div>
+                  <select
+                    value={filterType}
+                    onChange={(e) => setFilterType(e.target.value as '' | PromoType)}
+                    className="input-field w-auto text-sm py-1.5"
+                  >
+                    <option value="">Semua Tipe</option>
+                    {(Object.entries(TYPE_LABELS) as [PromoType, string][]).map(([k, v]) => (
+                      <option key={k} value={k}>{v}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               {filteredRecs.length === 0 ? (
@@ -772,6 +956,7 @@ export default function RekomendasiPromoPage() {
                       rec={rec}
                       editingId={editingId}
                       editParams={editParams}
+                      discountInfo={discountMap[rec.store_product_id]}
                       onApprove={handleApprove}
                       onReject={handleReject}
                       onStartEdit={handleStartEdit}

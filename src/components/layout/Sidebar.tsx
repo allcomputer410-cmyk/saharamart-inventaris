@@ -30,6 +30,7 @@ import {
   ClipboardList,
   RotateCcw,
   Lightbulb,
+  Palette,
 } from 'lucide-react';
 
 // Role yang boleh akses menu bertanda restricted
@@ -63,6 +64,7 @@ const MENU_PERMISSION_MAP: Record<string, string> = {
   'analisis':         'analisis_keuangan',
   'promo':                'promo',
   'rekomendasi-promo':    'promo',
+  'desain-promo':         'promo',
 };
 
 const GLOBAL_PERMISSION_MAP: Record<string, string> = {
@@ -156,7 +158,10 @@ export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole 
       ? { label: 'Promo', href: `/toko/${storeId}/promo`, icon: Tag }
       : { label: 'Promo', href: `/toko/${storeId}/promo`, icon: Tag, disabled: true, badge: 'Nonaktif' },
     ...(featurePromo
-      ? [{ label: 'Rekomendasi Promo', href: `/toko/${storeId}/rekomendasi-promo`, icon: Lightbulb }]
+      ? [
+          { label: 'Rekomendasi Promo', href: `/toko/${storeId}/rekomendasi-promo`, icon: Lightbulb },
+          { label: 'Desain Promo', href: `/toko/${storeId}/desain-promo`, icon: Palette },
+        ]
       : []),
     { label: 'Pengaturan', href: `/toko/${storeId}/settings`, icon: Settings },
     { label: 'Panduan', href: `/toko/${storeId}/panduan`, icon: HelpCircle },

@@ -1035,7 +1035,6 @@ def sync_discounts(ipos_conn, sb: SupabaseClient, store_id: str) -> int:
     if not rows:
         return 0
 
-    # Ambil semua store_products untuk mapping kodeitem → id
     sp_resp = sb.select("store_products", {
         "store_id": f"eq.{store_id}",
         "select": "id,ipos_kode",
@@ -1056,7 +1055,6 @@ def sync_discounts(ipos_conn, sb: SupabaseClient, store_id: str) -> int:
         jam_dari = str(row["jamdari"])[:8] if row["jamdari"] else None
         jam_sampai = str(row["jamsampai"])[:8] if row["jamsampai"] else None
 
-        # Ambil nilai diskon: prioritaskan dt.diskon, fallback ke d.pot
         d1 = float(row["diskon1"] or row["pot1"] or 0)
         d2 = float(row["diskon2"] or row["pot2"] or 0)
         d3 = float(row["diskon3"] or row["pot3"] or 0)
@@ -1103,7 +1101,6 @@ def sync_discounts(ipos_conn, sb: SupabaseClient, store_id: str) -> int:
     if not upsert_rows:
         return 0
 
-    # Upsert dalam batch
     BATCH = 200
     total = 0
     for i in range(0, len(upsert_rows), BATCH):

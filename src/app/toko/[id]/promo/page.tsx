@@ -16,6 +16,11 @@ import {
   AlertTriangle,
   TrendingUp,
   Package,
+  BarChart2,
+  Search,
+  ChevronDown,
+  ChevronUp,
+  RefreshCw,
 } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -74,6 +79,31 @@ interface StoreProductOption {
   name: string;
   hpp: number;
   sell_price: number;
+}
+
+interface IposDiscount {
+  id: string;
+  store_product_id: string | null;
+  ipos_kodeitem: string;
+  ipos_iddiskon: string;
+  diskon1: number;
+  disknom1: number;
+  tgl_dari: string | null;
+  tgl_sampai: string | null;
+  jam_dari: string | null;
+  jam_sampai: string | null;
+  is_active: boolean;
+  synced_at: string;
+  store_products: { name: string; barcode: string; sell_price: number; hpp: number } | null;
+}
+
+interface DiscountPerf {
+  discount: IposDiscount;
+  beforeQty: number;
+  beforeRev: number;
+  duringQty: number;
+  duringRev: number;
+  loaded: boolean;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -158,6 +188,13 @@ export default function PromoPage() {
   const [saving, setSaving] = useState(false);
   const [filterType, setFilterType] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [activeTab, setActiveTab] = useState<'daftar' | 'performa'>('daftar');
+  const [discounts, setDiscounts] = useState<IposDiscount[]>([]);
+  const [discountPerf, setDiscountPerf] = useState<DiscountPerf[]>([]);
+  const [discountLoading, setDiscountLoading] = useState(false);
+  const [discountSearch, setDiscountSearch] = useState('');
+  const [discountFilter, setDiscountFilter] = useState<'all' | 'active' | 'inactive'>('all');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Form state
   const [formName, setFormName] = useState('');
@@ -197,7 +234,59 @@ export default function PromoPage() {
     setProducts((data as StoreProductOption[]) || []);
   }, [storeId, supabase]);
 
+  const fetchDiscounts = useCallback(async () => {
+    setDiscountLoading(true);
+    const { data } = await supabase
+      .from('store_item_discounts')
+      .select('*, store_products(name, barcode, sell_price, hpp)')
+      .eq('store_id', storeId)
+      .order('is_active', { ascending: false })
+      .order('tgl_dari', { ascending: false });
+    const list = (data as IposDiscount[]) || [];
+    setDiscounts(list);
+    setDiscountPerf(list.map((d) => ({
+      discount: d,
+      beforeQty: 0, beforeRev: 0,
+      duringQty: 0, duringRev: 0,
+      loaded: false,
+    })));
+    setDiscountLoading(false);
+  }, [storeId, supabase]);
+
+  const loadPerfData = useCallback(async (disc: IposDiscount, idx: number) => {
+    if (!disc.store_product_id || !disc.tgl_dari) return;
+    const tglDari = new Date(disc.tgl_dari);
+    const before7 = new Date(tglDari);
+    before7.setDate(before7.getDate() - 7);
+    const today = new Date().toISOString().split('T')[0];
+
+    const [{ data: bef }, { data: dur }] = await Promise.all([
+      supabase
+        .from('daily_sale_items')
+        .select('total_qty, total_revenue')
+        .eq('store_product_id', disc.store_product_id)
+        .gte('sale_date', before7.toISOString().split('T')[0])
+        .lt('sale_date', tglDari.toISOString().split('T')[0]),
+      supabase
+        .from('daily_sale_items')
+        .select('total_qty, total_revenue')
+        .eq('store_product_id', disc.store_product_id)
+        .gte('sale_date', tglDari.toISOString().split('T')[0])
+        .lte('sale_date', disc.tgl_sampai ? disc.tgl_sampai.split('T')[0] : today),
+    ]);
+
+    setDiscountPerf((prev) => prev.map((p, i) => i !== idx ? p : {
+      ...p,
+      beforeQty: (bef || []).reduce((s, r) => s + r.total_qty, 0),
+      beforeRev: (bef || []).reduce((s, r) => s + r.total_revenue, 0),
+      duringQty: (dur || []).reduce((s, r) => s + r.total_qty, 0),
+      duringRev: (dur || []).reduce((s, r) => s + r.total_revenue, 0),
+      loaded: true,
+    }));
+  }, [supabase]);
+
   useEffect(() => { fetchPromos(); fetchProducts(); }, [fetchPromos, fetchProducts]);
+  useEffect(() => { if (activeTab === 'performa') fetchDiscounts(); }, [activeTab, fetchDiscounts]);
 
   // ─── Form Helpers ────────────────────────────────────────────────────────────
 
@@ -382,6 +471,21 @@ export default function PromoPage() {
 
   // ─── Render ───────────────────────────────────────────────────────────────────
 
+  // ─── Filtered discounts ───────────────────────────────────────────────────────
+  const filteredDiscountPerf = discountPerf.filter((dp) => {
+    const d = dp.discount;
+    if (discountFilter === 'active' && !d.is_active) return false;
+    if (discountFilter === 'inactive' && d.is_active) return false;
+    if (discountSearch) {
+      const q = discountSearch.toLowerCase();
+      const name = d.store_products?.name?.toLowerCase() || '';
+      const barcode = d.store_products?.barcode?.toLowerCase() || '';
+      const kode = d.ipos_kodeitem?.toLowerCase() || '';
+      if (!name.includes(q) && !barcode.includes(q) && !kode.includes(q)) return false;
+    }
+    return true;
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -389,12 +493,33 @@ export default function PromoPage() {
           <h1 className="text-xl font-bold text-gray-800">Promo &amp; Diskon</h1>
           <p className="text-sm text-gray-500 mt-1">Kelola promosi dan diskon produk</p>
         </div>
-        <button onClick={openCreate} className="btn-primary flex items-center gap-2">
-          <Plus className="w-4 h-4" />
-          Buat Promo Baru
+        {activeTab === 'daftar' && (
+          <button onClick={openCreate} className="btn-primary flex items-center gap-2">
+            <Plus className="w-4 h-4" />
+            Buat Promo Baru
+          </button>
+        )}
+      </div>
+
+      {/* Tab Navigation */}
+      <div className="flex gap-1 border-b border-gray-200">
+        <button
+          onClick={() => setActiveTab('daftar')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'daftar' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+        >
+          Daftar Promo
+        </button>
+        <button
+          onClick={() => setActiveTab('performa')}
+          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'performa' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+        >
+          <BarChart2 className="w-4 h-4" />
+          Performa Diskon iPOS
         </button>
       </div>
 
+      {/* ── TAB: DAFTAR PROMO ─────────────────────────────────────────────────── */}
+      {activeTab === 'daftar' && (<>
       {/* Filters */}
       <div className="flex flex-wrap gap-2">
         <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="input-field w-auto text-sm py-1.5">
@@ -477,6 +602,181 @@ export default function PromoPage() {
           </div>
         )}
       </div>
+      </>)}
+
+      {/* ── TAB: PERFORMA DISKON IPOS ─────────────────────────────────────────── */}
+      {activeTab === 'performa' && (
+        <div className="space-y-3">
+          {/* Toolbar */}
+          <div className="flex flex-wrap gap-2 items-center justify-between">
+            <div className="flex gap-2 flex-1 min-w-0">
+              <div className="relative flex-1 max-w-xs">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Cari produk..."
+                  value={discountSearch}
+                  onChange={(e) => setDiscountSearch(e.target.value)}
+                  className="input-field pl-9 text-sm py-2 w-full"
+                />
+              </div>
+              <div className="flex gap-1">
+                {(['all', 'active', 'inactive'] as const).map((f) => (
+                  <button key={f} onClick={() => setDiscountFilter(f)}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${discountFilter === f ? 'bg-blue-600 text-white border-blue-600' : 'text-gray-600 border-gray-300 hover:border-blue-400'}`}>
+                    {f === 'all' ? 'Semua' : f === 'active' ? 'Aktif' : 'Tidak Aktif'}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <button onClick={fetchDiscounts} disabled={discountLoading}
+              className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 text-gray-600 text-xs rounded-lg hover:bg-gray-50 disabled:opacity-50">
+              <RefreshCw className={`w-3.5 h-3.5 ${discountLoading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
+
+          {discountLoading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+            </div>
+          ) : discounts.length === 0 ? (
+            <div className="card text-center py-12">
+              <Tag className="w-10 h-10 text-gray-200 mx-auto mb-3" />
+              <p className="text-gray-500 text-sm font-medium">Belum ada data diskon dari iPOS</p>
+              <p className="text-gray-400 text-xs mt-1">Pastikan sync agent sudah berjalan dan tabel store_item_discounts sudah dibuat di Supabase.</p>
+            </div>
+          ) : filteredDiscountPerf.length === 0 ? (
+            <div className="card text-center py-12">
+              <Package className="w-10 h-10 text-gray-200 mx-auto mb-3" />
+              <p className="text-gray-500 text-sm">Tidak ada hasil untuk filter ini.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {filteredDiscountPerf.map((dp, idx) => {
+                const d = dp.discount;
+                const name = d.store_products?.name || d.ipos_kodeitem;
+                const barcode = d.store_products?.barcode || '';
+                const sellPrice = d.store_products?.sell_price || 0;
+                const hpp = d.store_products?.hpp || 0;
+                const diskonLabel = d.diskon1 > 0 ? `${d.diskon1}%` : d.disknom1 > 0 ? `-${formatRupiah(d.disknom1)}` : '—';
+                const promoPrice = d.diskon1 > 0 ? sellPrice * (1 - d.diskon1 / 100) : d.disknom1 > 0 ? sellPrice - d.disknom1 : sellPrice;
+                const marginPct = promoPrice > 0 && hpp > 0 ? (promoPrice - hpp) / promoPrice * 100 : null;
+                const isExpanded = expandedId === d.id;
+
+                const qtyChange = dp.beforeQty === 0 ? null : (dp.duringQty - dp.beforeQty) / dp.beforeQty * 100;
+                const revChange = dp.beforeRev === 0 ? null : (dp.duringRev - dp.beforeRev) / dp.beforeRev * 100;
+
+                return (
+                  <div key={d.id} className={`card border ${d.is_active ? 'border-green-200' : 'border-gray-200'} space-y-2`}>
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${d.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                            {d.is_active ? 'Aktif' : 'Tidak Aktif'}
+                          </span>
+                          <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium">
+                            Diskon {diskonLabel}
+                          </span>
+                          {marginPct !== null && (
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${marginPct < 0 ? 'bg-red-100 text-red-700' : marginPct < 5 ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-600'}`}>
+                              Margin {marginPct.toFixed(1)}%{marginPct < 0 ? ' ⚠' : ''}
+                            </span>
+                          )}
+                        </div>
+                        <p className="font-semibold text-gray-800 mt-1 truncate">{name}</p>
+                        {barcode && <p className="text-xs text-gray-400">{barcode}</p>}
+                        {(d.tgl_dari || d.tgl_sampai) && (
+                          <p className="text-xs text-gray-400 mt-0.5">
+                            {d.tgl_dari ? d.tgl_dari.split('T')[0] : '∞'} — {d.tgl_sampai ? d.tgl_sampai.split('T')[0] : '∞'}
+                            {d.jam_dari && ` | ${d.jam_dari}–${d.jam_sampai || '...'}`}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => {
+                          if (!isExpanded) {
+                            setExpandedId(d.id);
+                            if (!dp.loaded) loadPerfData(d, idx);
+                          } else {
+                            setExpandedId(null);
+                          }
+                        }}
+                        className="p-1 text-gray-400 hover:text-gray-600 flex-shrink-0"
+                      >
+                        {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                      </button>
+                    </div>
+
+                    {/* Expanded: perbandingan penjualan */}
+                    {isExpanded && (
+                      <div className="pt-2 border-t border-gray-100 space-y-2">
+                        {!d.store_product_id ? (
+                          <p className="text-xs text-gray-400">Produk ini belum tersinkron ke store_products — tidak bisa hitung perbandingan.</p>
+                        ) : !d.tgl_dari ? (
+                          <p className="text-xs text-gray-400">Diskon ini tidak memiliki tanggal mulai — tidak bisa hitung perbandingan.</p>
+                        ) : !dp.loaded ? (
+                          <div className="flex items-center gap-2 text-xs text-gray-400">
+                            <Loader2 className="w-3 h-3 animate-spin" /> Memuat data penjualan...
+                          </div>
+                        ) : (
+                          <>
+                            <p className="text-xs font-semibold text-gray-600 flex items-center gap-1">
+                              <TrendingUp className="w-3.5 h-3.5 text-blue-500" />
+                              Perbandingan Penjualan (7 hari sebelum vs selama diskon)
+                            </p>
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                              <div className="bg-gray-50 rounded-lg px-3 py-2">
+                                <p className="text-gray-400">7 Hari Sebelum</p>
+                                <p className="font-semibold text-gray-700 text-sm">{dp.beforeQty} pcs</p>
+                                <p className="text-gray-500">{formatRupiah(dp.beforeRev)}</p>
+                              </div>
+                              <div className="bg-blue-50 rounded-lg px-3 py-2">
+                                <p className="text-blue-500">Selama Diskon</p>
+                                <p className="font-semibold text-blue-700 text-sm">
+                                  {dp.duringQty} pcs
+                                  {qtyChange !== null && (
+                                    <span className={`ml-1 text-xs font-normal ${qtyChange >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                                      ({qtyChange >= 0 ? '+' : ''}{qtyChange.toFixed(0)}%)
+                                    </span>
+                                  )}
+                                </p>
+                                <p className="text-blue-600">
+                                  {formatRupiah(dp.duringRev)}
+                                  {revChange !== null && (
+                                    <span className={`ml-1 text-xs ${revChange >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                                      ({revChange >= 0 ? '+' : ''}{revChange.toFixed(0)}%)
+                                    </span>
+                                  )}
+                                </p>
+                              </div>
+                            </div>
+                            {dp.beforeQty === 0 && dp.duringQty === 0 && (
+                              <p className="text-xs text-amber-600 flex items-center gap-1">
+                                <AlertTriangle className="w-3 h-3" />
+                                Belum ada data penjualan tersinkron untuk produk ini.
+                              </p>
+                            )}
+                          </>
+                        )}
+                        {/* Info harga */}
+                        {sellPrice > 0 && (
+                          <div className="flex gap-3 text-xs text-gray-500 pt-1">
+                            <span>Harga Normal: <b className="text-gray-700">{formatRupiah(sellPrice)}</b></span>
+                            <span>Harga Diskon: <b className="text-gray-700">{formatRupiah(promoPrice)}</b></span>
+                            {hpp > 0 && <span>HPP: <b className="text-gray-700">{formatRupiah(hpp)}</b></span>}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Modal Form */}
       {showModal && (
