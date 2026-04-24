@@ -440,8 +440,7 @@ export default function CekStokPage() {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
       const sid = await ensureSession();
-      const target = items.find(i => i.id === id);
-      if (!target) return;
+      if (!sid) return;
       await supabase
         .from('cek_stok_session_items')
         .update({ stok_fisik: value })

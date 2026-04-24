@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { formatRupiah } from '@/lib/utils';
@@ -77,7 +77,8 @@ function generateTransferNumber(): string {
 export default function TransferStokPage() {
   const params = useParams();
   const storeId = params.id as string;
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
 
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [stores, setStores] = useState<StoreOption[]>([]);
@@ -220,8 +221,25 @@ export default function TransferStokPage() {
   const handleSend = async (transfer: Transfer) => {
     if (!confirm('Kirim transfer? Stok toko asal akan berkurang.')) return;
 
+    // Validasi stok terkini sebelum proses — cegah stok hantu jika stok berubah sejak transfer dibuat
+    const transferItems = transfer.items || [];
+    for (const item of transferItems) {
+      const { data: stockCheck } = await supabase
+        .from('stock')
+        .select('current_qty')
+        .eq('store_id', storeId)
+        .eq('store_product_id', item.store_product_id)
+        .single();
+      const tersedia = (stockCheck?.current_qty as number) ?? 0;
+      if (tersedia < item.qty) {
+        const namaProduk = item.store_product?.name || item.store_product_id;
+        alert(`Stok tidak cukup untuk "${namaProduk}"\nTersedia: ${tersedia} | Diminta: ${item.qty}\n\nTransfer dibatalkan.`);
+        return;
+      }
+    }
+
     // Kurangi stock di toko asal
-    for (const item of transfer.items || []) {
+    for (const item of transferItems) {
       const { data: stockRow } = await supabase
         .from('stock')
         .select('id, current_qty')
@@ -230,7 +248,7 @@ export default function TransferStokPage() {
         .single();
 
       if (stockRow) {
-        const newQty = Math.max(0, (stockRow.current_qty as number) - item.qty);
+        const newQty = (stockRow.current_qty as number) - item.qty;
         await supabase.from('stock').update({ current_qty: newQty }).eq('id', stockRow.id);
         await supabase.from('stock_movements').insert([{
           store_id: storeId,

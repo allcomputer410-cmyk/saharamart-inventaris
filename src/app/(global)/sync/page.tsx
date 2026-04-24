@@ -2,7 +2,7 @@
 
 export const dynamic = 'force-dynamic';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import {
   RefreshCw,
@@ -57,7 +57,8 @@ function timeAgo(dateStr: string): string {
 }
 
 export default function SyncPage() {
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
   const [syncLogs, setSyncLogs] = useState<SyncLogRow[]>([]);
   const [storeStatuses, setStoreStatuses] = useState<StoreStatus[]>([]);
   const [loading, setLoading] = useState(true);
@@ -103,7 +104,8 @@ export default function SyncPage() {
     }
     setStoreStatuses(Array.from(storeMap.values()));
     setLoading(false);
-  }, [supabase]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     fetchSyncLogs();

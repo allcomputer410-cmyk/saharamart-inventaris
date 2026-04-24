@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import {
@@ -52,7 +52,8 @@ const emptyForm: SupplierForm = {
 export default function SupplierPage() {
   const params = useParams();
   const storeId = params.id as string;
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
 
   const [storeSuppliers, setStoreSuppliers] = useState<StoreSupplierRow[]>([]);
   const [loading, setLoading] = useState(true);

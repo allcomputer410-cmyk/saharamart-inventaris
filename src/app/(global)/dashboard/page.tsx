@@ -2,7 +2,7 @@
 
 export const dynamic = 'force-dynamic';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import {
   Store as StoreIcon,
@@ -37,7 +37,8 @@ interface StoreStats {
 }
 
 export default function GlobalDashboardPage() {
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
   const [loading, setLoading] = useState(true);
   const [storeStats, setStoreStats] = useState<StoreStats[]>([]);
 
@@ -60,16 +61,12 @@ export default function GlobalDashboardPage() {
 
       for (const store of stores) {
         // Parallel queries per store
-        const [productsRes, criticalRes, ordersRes, salesRes, urgentPromosRes] = await Promise.all([
+        const [productsRes, ordersRes, salesRes, urgentPromosRes] = await Promise.all([
           supabase
             .from('store_products')
             .select('id', { count: 'exact', head: true })
             .eq('store_id', store.id)
             .eq('is_deleted', false),
-          supabase
-            .from('stock')
-            .select('current_qty, min_qty')
-            .eq('store_id', store.id),
           supabase
             .from('orders')
             .select('id', { count: 'exact', head: true })
@@ -89,9 +86,20 @@ export default function GlobalDashboardPage() {
             .eq('priority', 'urgent'),
         ]);
 
-        const criticalCount = (criticalRes.data || []).filter(
-          (s) => s.current_qty <= s.min_qty
-        ).length;
+        // Paginate critical stock to avoid 1000-row Supabase limit
+        const STOCK_PAGE = 1000;
+        let stockOffset = 0;
+        let criticalCount = 0;
+        while (true) {
+          const { data: stockBatch } = await supabase
+            .from('stock').select('current_qty, min_qty')
+            .eq('store_id', store.id).gt('min_qty', 0)
+            .range(stockOffset, stockOffset + STOCK_PAGE - 1);
+          if (!stockBatch || stockBatch.length === 0) break;
+          criticalCount += stockBatch.filter(s => s.current_qty <= s.min_qty).length;
+          if (stockBatch.length < STOCK_PAGE) break;
+          stockOffset += STOCK_PAGE;
+        }
 
         stats.push({
           storeId: store.id,

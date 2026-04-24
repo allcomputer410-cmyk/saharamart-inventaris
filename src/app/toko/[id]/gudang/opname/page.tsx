@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { ClipboardList, Plus, X, Loader2, ChevronDown, ChevronUp, CheckCircle2 } from 'lucide-react';
@@ -53,7 +53,8 @@ const PAGE_SIZE = 20;
 export default function StokOpnamePage() {
   const params = useParams();
   const storeId = params.id as string;
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
 
   const [opnames, setOpnames] = useState<Opname[]>([]);
   const [loading, setLoading] = useState(true);
@@ -95,16 +96,25 @@ export default function StokOpnamePage() {
     if (!formPeriod.trim()) return;
     setSaving(true);
     try {
-      // Load all active products with current stock
-      const { data: stockData } = await supabase
-        .from('stock')
-        .select('store_product_id, current_qty')
-        .eq('store_id', storeId);
-
+      // Load all active products with current stock (paginated — default limit 1000)
       const stockMap: Record<string, number> = {};
-      for (const s of (stockData || [])) {
-        stockMap[(s as { store_product_id: string; current_qty: number }).store_product_id] =
-          (s as { store_product_id: string; current_qty: number }).current_qty;
+      {
+        const PAGE = 1000;
+        let offset = 0;
+        while (true) {
+          const { data: batch } = await supabase
+            .from('stock')
+            .select('store_product_id, current_qty')
+            .eq('store_id', storeId)
+            .range(offset, offset + PAGE - 1);
+          if (!batch || batch.length === 0) break;
+          for (const s of batch) {
+            stockMap[(s as { store_product_id: string; current_qty: number }).store_product_id] =
+              (s as { store_product_id: string; current_qty: number }).current_qty;
+          }
+          if (batch.length < PAGE) break;
+          offset += PAGE;
+        }
       }
 
       const { data: opnameData } = await supabase
@@ -122,16 +132,28 @@ export default function StokOpnamePage() {
       const opnameId = (opnameData as { id: string } | null)?.id;
       if (!opnameId) return;
 
-      // Get all active products
-      const { data: products } = await supabase
-        .from('store_products')
-        .select('id')
-        .eq('store_id', storeId)
-        .eq('is_active', true)
-        .eq('is_deleted', false);
+      // Get all active products (paginated)
+      const allProducts: { id: string }[] = [];
+      {
+        const PAGE = 1000;
+        let offset = 0;
+        while (true) {
+          const { data: batch } = await supabase
+            .from('store_products')
+            .select('id')
+            .eq('store_id', storeId)
+            .eq('is_active', true)
+            .eq('is_deleted', false)
+            .range(offset, offset + PAGE - 1);
+          if (!batch || batch.length === 0) break;
+          allProducts.push(...(batch as { id: string }[]));
+          if (batch.length < PAGE) break;
+          offset += PAGE;
+        }
+      }
 
-      if (products && products.length > 0) {
-        const items = products.map((p: { id: string }) => ({
+      if (allProducts.length > 0) {
+        const items = allProducts.map((p: { id: string }) => ({
           opname_id: opnameId,
           store_product_id: p.id,
           qty_system: stockMap[p.id] ?? 0,
@@ -192,28 +214,59 @@ export default function StokOpnamePage() {
     if (!confirm('Setujui opname? Stok akan diupdate sesuai hitungan fisik.')) return;
     setSaving(true);
     try {
-      for (const item of (opname.items || [])) {
-        if (!item.id || item.qty_diff === 0) continue;
-        const { data: stockRow } = await supabase
-          .from('stock')
-          .select('id, current_qty')
-          .eq('store_id', storeId)
-          .eq('store_product_id', item.store_product_id)
-          .single();
+      const diffItems = (opname.items || []).filter(i => i.id && i.qty_diff !== 0);
 
-        if (stockRow) {
-          const before = (stockRow as { id: string; current_qty: number }).current_qty;
-          await supabase.from('stock').update({ current_qty: item.qty_physical }).eq('id', (stockRow as { id: string }).id);
-          await supabase.from('stock_movements').insert([{
+      if (diffItems.length > 0) {
+        // Batch fetch current stock (chunked IN to avoid URL limits)
+        const productIds = diffItems.map(i => i.store_product_id);
+        const stockMap = new Map<string, { id: string; current_qty: number }>();
+        const CHUNK = 500;
+        for (let ci = 0; ci < productIds.length; ci += CHUNK) {
+          const { data: stockRows } = await supabase
+            .from('stock')
+            .select('id, store_product_id, current_qty')
+            .eq('store_id', storeId)
+            .in('store_product_id', productIds.slice(ci, ci + CHUNK));
+          for (const s of (stockRows || [])) {
+            stockMap.set(
+              (s as { id: string; store_product_id: string; current_qty: number }).store_product_id,
+              { id: (s as { id: string; store_product_id: string; current_qty: number }).id,
+                current_qty: (s as { id: string; store_product_id: string; current_qty: number }).current_qty }
+            );
+          }
+        }
+
+        // Build movements batch
+        const movements: object[] = [];
+        for (const item of diffItems) {
+          const s = stockMap.get(item.store_product_id);
+          if (!s) continue;
+          movements.push({
             store_id: storeId,
             store_product_id: item.store_product_id,
             movement_type: 'opname',
-            qty_before: before,
+            qty_before: s.current_qty,
             qty_change: item.qty_diff,
             qty_after: item.qty_physical,
             reference_type: 'opname',
             reference_id: opname.id,
-          }]);
+          });
+        }
+
+        // Update stock in parallel batches of 20
+        const PARALLEL = 20;
+        for (let i = 0; i < diffItems.length; i += PARALLEL) {
+          await Promise.all(diffItems.slice(i, i + PARALLEL).map(item => {
+            const s = stockMap.get(item.store_product_id);
+            if (!s) return Promise.resolve();
+            return supabase.from('stock').update({ current_qty: item.qty_physical }).eq('id', s.id);
+          }));
+        }
+
+        // Batch insert stock_movements
+        const BATCH = 500;
+        for (let i = 0; i < movements.length; i += BATCH) {
+          await supabase.from('stock_movements').insert(movements.slice(i, i + BATCH));
         }
       }
 

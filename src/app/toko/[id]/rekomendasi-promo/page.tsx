@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { formatRupiah, formatDate } from '@/lib/utils';
@@ -22,6 +22,7 @@ import {
   BarChart2,
   RotateCcw,
   ExternalLink,
+  Palette,
 } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -66,9 +67,8 @@ interface DiscountInfo {
 }
 
 interface SalesRow {
-  sale_date: string;
-  total_qty: number;
-  total_revenue: number;
+  qty_sold: number;
+  revenue: number;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -106,7 +106,8 @@ function SalesComparisonPanel({
   storeProductId: string;
   discountInfo: DiscountInfo;
 }) {
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
   const [rows, setRows] = useState<{ before: SalesRow[]; during: SalesRow[] } | null>(null);
   const [compLoading, setCompLoading] = useState(true);
 
@@ -121,14 +122,14 @@ function SalesComparisonPanel({
 
       const [{ data: beforeData }, { data: duringData }] = await Promise.all([
         supabase
-          .from('daily_sale_items')
-          .select('sale_date, total_qty, total_revenue')
+          .from('v_sale_items_detail')
+          .select('qty_sold, revenue')
           .eq('store_product_id', storeProductId)
           .gte('sale_date', before7Start.toISOString().split('T')[0])
           .lt('sale_date', tglDari.toISOString().split('T')[0]),
         supabase
-          .from('daily_sale_items')
-          .select('sale_date, total_qty, total_revenue')
+          .from('v_sale_items_detail')
+          .select('qty_sold, revenue')
           .eq('store_product_id', storeProductId)
           .gte('sale_date', tglDari.toISOString().split('T')[0])
           .lte('sale_date', today.toISOString().split('T')[0]),
@@ -141,8 +142,8 @@ function SalesComparisonPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeProductId, discountInfo.tgl_dari]);
 
-  const sumQty = (r: SalesRow[]) => r.reduce((s, x) => s + x.total_qty, 0);
-  const sumRev = (r: SalesRow[]) => r.reduce((s, x) => s + x.total_revenue, 0);
+  const sumQty = (r: SalesRow[]) => r.reduce((s, x) => s + x.qty_sold, 0);
+  const sumRev = (r: SalesRow[]) => r.reduce((s, x) => s + x.revenue, 0);
 
   if (compLoading) return (
     <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
@@ -232,6 +233,7 @@ function RecommendationCard({
   onSaveEdit,
   onEditParamChange,
   onOpenPromoForm,
+  onMakePoster,
 }: {
   rec: PromoRecommendation;
   editingId: string | null;
@@ -243,6 +245,7 @@ function RecommendationCard({
   onSaveEdit: (rec: PromoRecommendation) => void;
   onEditParamChange: (key: string, value: number) => void;
   onOpenPromoForm: (rec: PromoRecommendation) => void;
+  onMakePoster: (rec: PromoRecommendation) => void;
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const isEditing = editingId === rec.id;
@@ -253,7 +256,6 @@ function RecommendationCard({
     ? (editParams.margin_promo_pct ?? editParams.margin_bundle_pct ?? editParams.margin_flash_pct ?? editParams.margin_efektif_pct ?? 0)
     : Number(rec.params.margin_promo_pct ?? rec.params.margin_bundle_pct ?? rec.params.margin_flash_pct ?? rec.params.margin_efektif_pct ?? 0);
 
-  const _canApprove = !isEditing || marginPct >= 0;
 
   return (
     <div className={`card border ${pc.color} space-y-3`}>
@@ -520,7 +522,9 @@ function RecommendationCard({
           <>
             <button
               onClick={() => onApprove(rec)}
-              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-lg transition-colors"
+              disabled={marginPct < 0}
+              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-xs font-medium rounded-lg transition-colors"
+              title={marginPct < 0 ? `Tidak bisa approve — margin negatif (${marginPct.toFixed(1)}%), toko akan rugi` : 'Klik untuk konfirmasi — promo akan langsung dibuat & aktif'}
             >
               <CheckCircle className="w-3.5 h-3.5" />
               Setuju
@@ -543,14 +547,21 @@ function RecommendationCard({
         )}
       </div>
 
-      {/* Shortcut: buat promo manual dari rekomendasi ini */}
-      <div className="border-t border-gray-100 pt-2">
+      {/* Shortcut buttons */}
+      <div className="border-t border-gray-100 pt-2 flex gap-1">
         <button
           onClick={() => onOpenPromoForm(rec)}
-          className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+          className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
         >
           <ExternalLink className="w-3 h-3" />
-          Buat Promo Manual (form lengkap)
+          Buat Promo
+        </button>
+        <button
+          onClick={() => onMakePoster(rec)}
+          className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs text-purple-600 hover:text-purple-700 hover:bg-purple-50 rounded-lg transition-colors border border-purple-200"
+        >
+          <Palette className="w-3 h-3" />
+          Buat Poster
         </button>
       </div>
     </div>
@@ -563,7 +574,8 @@ export default function RekomendasiPromoPage() {
   const params = useParams();
   const storeId = params.id as string;
   const router = useRouter();
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
 
   const [recs, setRecs] = useState<PromoRecommendation[]>([]);
   const [history, setHistory] = useState<PromoRecommendation[]>([]);
@@ -577,6 +589,11 @@ export default function RekomendasiPromoPage() {
   const [editParams, setEditParams] = useState<Record<string, number>>({});
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
   const [emptyReason, setEmptyReason] = useState<'no_sale_data' | 'all_normal' | null>(null);
+  // Konfirmasi approve — cegah salah klik
+  const [approveConfirm, setApproveConfirm] = useState<PromoRecommendation | null>(null);
+  // Konfirmasi restore approved — tampilkan info promo yang akan dihapus
+  const [restoreConfirm, setRestoreConfirm] = useState<PromoRecommendation | null>(null);
+  const [restoring, setRestoring] = useState(false);
   const [discountMap, setDiscountMap] = useState<Record<string, DiscountInfo>>({});
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
@@ -609,7 +626,8 @@ export default function RekomendasiPromoPage() {
     setRecs(sortedPending);
     setHistory(hist || []);
     setLoading(false);
-  }, [storeId, supabase]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId]);
 
   const fetchDiscounts = useCallback(async () => {
     const now = new Date().toISOString();
@@ -638,7 +656,8 @@ export default function RekomendasiPromoPage() {
       }
       setDiscountMap(map);
     }
-  }, [storeId, supabase]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId]);
 
   useEffect(() => { fetchRecs(); fetchDiscounts(); }, [fetchRecs, fetchDiscounts]);
 
@@ -671,6 +690,33 @@ export default function RekomendasiPromoPage() {
   };
 
   const handleApprove = async (rec: PromoRecommendation) => {
+    // Safety net: hitung ulang margin dari params sebelum approve
+    let finalMargin = 0;
+    if (rec.promo_type === 'discount') {
+      const promoPrice = rec.sell_price * (1 - Number(rec.params.discount_pct ?? 0) / 100);
+      finalMargin = promoPrice > 0 ? (promoPrice - rec.hpp) / promoPrice * 100 : -100;
+    } else if (rec.promo_type === 'bundle') {
+      const bundlePrice = rec.sell_price * 2 * (1 - Number(rec.params.bundle_discount_pct ?? 12) / 100);
+      finalMargin = bundlePrice > 0 ? (bundlePrice - rec.hpp * 2) / bundlePrice * 100 : -100;
+    } else if (rec.promo_type === 'bxgy') {
+      const buyQty = Number(rec.params.buy_qty ?? 3);
+      const freeQty = Number(rec.params.free_qty ?? 1);
+      const profitPerSet = (buyQty * rec.sell_price) - ((buyQty + freeQty) * rec.hpp);
+      finalMargin = buyQty > 0 ? profitPerSet / (buyQty * rec.sell_price) * 100 : -100;
+    } else if (rec.promo_type === 'flash_sale') {
+      const flashPrice = rec.sell_price * (1 - Number(rec.params.flash_discount_pct ?? 0) / 100);
+      finalMargin = flashPrice > 0 ? (flashPrice - rec.hpp) / flashPrice * 100 : -100;
+    } else if (rec.promo_type === 'min_purchase') {
+      const minPurchase = Number(rec.params.min_purchase ?? rec.sell_price);
+      const discNom = Number(rec.params.discount_nom ?? 0);
+      const netRevenue = minPurchase - discNom;
+      finalMargin = netRevenue > 0 ? (netRevenue - rec.hpp) / netRevenue * 100 : -100;
+    }
+    if (finalMargin < 0) {
+      showToast(`Tidak bisa approve — margin negatif (${finalMargin.toFixed(1)}%), promo price di bawah HPP`, 'error');
+      return;
+    }
+
     try {
       const today = new Date().toISOString().split('T')[0];
       const endDate = new Date();
@@ -713,8 +759,10 @@ export default function RekomendasiPromoPage() {
       if (rec.promo_type === 'discount') {
         ruleData.discount_pct_1 = Number(rec.params.discount_pct ?? 0);
       } else if (rec.promo_type === 'bundle') {
-        ruleData.bundle_price = Number(rec.params.bundle_price ?? 0);
-        ruleData.min_qty = Number(rec.params.bundle_qty ?? 2);
+        const bundleDiscPct = Number(rec.params.bundle_discount_pct ?? 12);
+        const bundleQty = Number(rec.params.bundle_qty ?? 2);
+        ruleData.bundle_price = Math.round(rec.sell_price * bundleQty * (1 - bundleDiscPct / 100));
+        ruleData.min_qty = bundleQty;
       } else if (rec.promo_type === 'bxgy') {
         ruleData.min_qty = Number(rec.params.buy_qty ?? 3);
         ruleData.free_qty = Number(rec.params.free_qty ?? 1);
@@ -763,14 +811,55 @@ export default function RekomendasiPromoPage() {
     showToast('Rekomendasi ditolak');
   };
 
-  const handleRestore = async (id: string) => {
-    await supabase
-      .from('promo_recommendations')
-      .update({ status: 'pending', rejected_at: null, approved_at: null, promotion_id: null })
-      .eq('id', id);
-    setHistory((prev) => prev.filter((r) => r.id !== id));
-    await fetchRecs();
-    showToast('Rekomendasi dikembalikan ke Pending');
+  // Restore: reset rekomendasi ke pending. Jika sebelumnya approved + punya promotion_id → hapus promo yang auto-dibuat.
+  const handleRestore = async (h: PromoRecommendation) => {
+    setRestoring(true);
+    try {
+      if (h.status === 'approved' && h.promotion_id) {
+        // Hapus promo yang dibuat otomatis saat approve
+        await supabase.from('promotions').delete().eq('id', h.promotion_id);
+      }
+      await supabase
+        .from('promo_recommendations')
+        .update({ status: 'pending', rejected_at: null, approved_at: null, promotion_id: null })
+        .eq('id', h.id);
+      setHistory((prev) => prev.filter((r) => r.id !== h.id));
+      await fetchRecs();
+      showToast(
+        h.status === 'approved' && h.promotion_id
+          ? 'Promo dihapus & rekomendasi dikembalikan ke Pending'
+          : 'Rekomendasi dikembalikan ke Pending'
+      );
+    } catch {
+      showToast('Gagal mengembalikan rekomendasi', 'error');
+    } finally {
+      setRestoring(false);
+      setRestoreConfirm(null);
+    }
+  };
+
+  // Buat ulang promo dari data rekomendasi (untuk yang sudah approved tapi promonya terlanjur dihapus)
+  const handleRebuild = async (h: PromoRecommendation) => {
+    setRestoring(true);
+    try {
+      // Hapus promo lama jika masih ada
+      if (h.promotion_id) {
+        await supabase.from('promotions').delete().eq('id', h.promotion_id);
+      }
+      // Reset dulu ke pending agar handleApprove bisa dipakai ulang
+      await supabase
+        .from('promo_recommendations')
+        .update({ status: 'pending', rejected_at: null, approved_at: null, promotion_id: null })
+        .eq('id', h.id);
+      setRestoreConfirm(null);
+      setHistory((prev) => prev.filter((r) => r.id !== h.id));
+      // Jalankan approve → buat promo baru
+      await handleApprove({ ...h, status: 'pending', promotion_id: null });
+    } catch {
+      showToast('Gagal membuat ulang promo', 'error');
+    } finally {
+      setRestoring(false);
+    }
   };
 
   const handleOpenPromoForm = (rec: PromoRecommendation) => {
@@ -784,6 +873,24 @@ export default function RekomendasiPromoPage() {
       rec_id: rec.id,
     });
     router.push(`/toko/${storeId}/promo?${q.toString()}`);
+  };
+
+  const handleMakePoster = (rec: PromoRecommendation) => {
+    const discountPct: number = rec.promo_type === 'discount'
+      ? Number(rec.params.discount_pct ?? 10)
+      : rec.promo_type === 'bundle'
+        ? Number(rec.params.bundle_discount_pct ?? 12)
+        : rec.promo_type === 'flash_sale'
+          ? Number(rec.params.flash_discount_pct ?? 10)
+          : 0;
+    const q = new URLSearchParams({
+      product_name: rec.product_name,
+      sell_price: String(rec.sell_price),
+      promo_type: rec.promo_type,
+      discount_pct: String(discountPct),
+      stock: String(rec.current_stock ?? 0),
+    });
+    router.push(`/toko/${storeId}/desain-promo?${q.toString()}`);
   };
 
   const handleStartEdit = (rec: PromoRecommendation) => {
@@ -804,7 +911,33 @@ export default function RekomendasiPromoPage() {
   const handleEditParamChange = (key: string, value: number) => {
     setEditParams((prev) => {
       const updated = { ...prev, [key]: value };
-      // Recalculate margin based on type
+      // Recalculate displayed margin in real-time
+      const rec = recs.find(r => r.id === editingId);
+      if (rec) {
+        if (rec.promo_type === 'discount') {
+          const discPct = key === 'discount_pct' ? value : (updated.discount_pct ?? 0);
+          const promoPrice = rec.sell_price * (1 - discPct / 100);
+          updated.margin_promo_pct = promoPrice > 0 ? (promoPrice - rec.hpp) / promoPrice * 100 : -100;
+        } else if (rec.promo_type === 'bundle') {
+          const bundleDiscPct = key === 'bundle_discount_pct' ? value : (updated.bundle_discount_pct ?? 12);
+          const bundlePrice = rec.sell_price * 2 * (1 - bundleDiscPct / 100);
+          updated.margin_bundle_pct = bundlePrice > 0 ? (bundlePrice - rec.hpp * 2) / bundlePrice * 100 : -100;
+        } else if (rec.promo_type === 'bxgy') {
+          const buyQty  = key === 'buy_qty'  ? value : (updated.buy_qty  ?? 3);
+          const freeQty = key === 'free_qty' ? value : (updated.free_qty ?? 1);
+          const profitPerSet = (buyQty * rec.sell_price) - ((buyQty + freeQty) * rec.hpp);
+          updated.margin_efektif_pct = buyQty > 0 ? profitPerSet / (buyQty * rec.sell_price) * 100 : -100;
+        } else if (rec.promo_type === 'flash_sale') {
+          const flashDisc  = key === 'flash_discount_pct' ? value : (updated.flash_discount_pct ?? 10);
+          const flashPrice = rec.sell_price * (1 - flashDisc / 100);
+          updated.margin_flash_pct = flashPrice > 0 ? (flashPrice - rec.hpp) / flashPrice * 100 : -100;
+        } else if (rec.promo_type === 'min_purchase') {
+          const minPurchase = key === 'min_purchase' ? value : (updated.min_purchase ?? rec.sell_price);
+          const discNom     = key === 'discount_nom'  ? value : (updated.discount_nom  ?? 0);
+          const netRevenue  = minPurchase - discNom;
+          updated.margin_efektif_pct = netRevenue > 0 ? (netRevenue - rec.hpp) / netRevenue * 100 : -100;
+        }
+      }
       return updated;
     });
   };
@@ -829,6 +962,11 @@ export default function RekomendasiPromoPage() {
       const flashDisc = editParams.flash_discount_pct ?? 10;
       const flashPrice = rec.sell_price * (1 - flashDisc / 100);
       marginPct = flashPrice > 0 ? (flashPrice - rec.hpp) / flashPrice * 100 : 0;
+    } else if (rec.promo_type === 'min_purchase') {
+      const minPurchase = editParams.min_purchase ?? rec.sell_price;
+      const discNom = editParams.discount_nom ?? 0;
+      const netRevenue = minPurchase - discNom;
+      marginPct = netRevenue > 0 ? ((netRevenue - rec.hpp) / netRevenue) * 100 : -100;
     }
 
     if (marginPct < 0) {
@@ -997,12 +1135,13 @@ export default function RekomendasiPromoPage() {
                       editingId={editingId}
                       editParams={editParams}
                       discountInfo={discountMap[rec.store_product_id]}
-                      onApprove={handleApprove}
+                      onApprove={(rec) => setApproveConfirm(rec)}
                       onReject={handleReject}
                       onStartEdit={handleStartEdit}
                       onSaveEdit={handleSaveEdit}
                       onEditParamChange={handleEditParamChange}
                       onOpenPromoForm={handleOpenPromoForm}
+                      onMakePoster={handleMakePoster}
                     />
                   ))}
                 </div>
@@ -1063,12 +1202,16 @@ export default function RekomendasiPromoPage() {
                           </td>
                           <td className="px-4 py-3 text-center">
                             <button
-                              onClick={() => handleRestore(h.id)}
-                              title={h.status === 'rejected' ? 'Kembalikan ke Pending' : 'Reset ke Pending'}
-                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-amber-700 bg-amber-50 border border-amber-200 hover:bg-amber-100 transition-colors"
+                              onClick={() => h.status === 'approved' && h.promotion_id ? setRestoreConfirm(h) : handleRestore(h)}
+                              title={h.status === 'approved' ? 'Batalkan promo & kembalikan ke Pending' : 'Kembalikan ke Pending'}
+                              className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs border transition-colors ${
+                                h.status === 'approved'
+                                  ? 'text-red-700 bg-red-50 border-red-200 hover:bg-red-100'
+                                  : 'text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100'
+                              }`}
                             >
                               <RotateCcw className="w-3 h-3" />
-                              {h.status === 'rejected' ? 'Kembalikan' : 'Reset'}
+                              {h.status === 'approved' ? 'Batalkan' : 'Kembalikan'}
                             </button>
                           </td>
                         </tr>
@@ -1080,6 +1223,118 @@ export default function RekomendasiPromoPage() {
             </div>
           )}
         </>
+      )}
+
+      {/* ── Modal Konfirmasi Setuju ───────────────────────────────────────────── */}
+      {approveConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center shrink-0">
+                <CheckCircle className="w-5 h-5 text-green-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-800">Konfirmasi Buat Promo</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Promo akan langsung aktif setelah dikonfirmasi</p>
+              </div>
+            </div>
+            <div className="bg-gray-50 rounded-xl p-3 text-sm space-y-1">
+              <p className="font-medium text-gray-800">{approveConfirm.product_name}</p>
+              <p className="text-gray-500">
+                Tipe: <span className="font-medium text-gray-700">{TYPE_LABELS[approveConfirm.promo_type]}</span>
+              </p>
+              <p className="text-gray-500">
+                Est. Profit: <span className="font-medium text-green-700">{formatRupiah(approveConfirm.est_profit)}</span>
+              </p>
+            </div>
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              ⚠ Promo akan otomatis dibuat &amp; diaktifkan. Jika ingin membatalkan nanti, gunakan tombol <b>Batalkan</b> di tab Riwayat.
+            </p>
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setApproveConfirm(null)}
+                className="flex-1 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors"
+              >
+                Batal
+              </button>
+              <button
+                onClick={() => { handleApprove(approveConfirm); setApproveConfirm(null); }}
+                className="flex-1 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-xl transition-colors"
+              >
+                Ya, Buat Promo
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal Restore / Rebuild Promo (approved) ────────────────────────── */}
+      {restoreConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+                <RotateCcw className="w-5 h-5 text-amber-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-800">Kelola Promo Ini</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Pilih tindakan untuk rekomendasi yang sudah disetujui</p>
+              </div>
+            </div>
+
+            <div className="bg-gray-50 rounded-xl p-3 text-sm space-y-1">
+              <p className="font-medium text-gray-800">{restoreConfirm.product_name}</p>
+              <p className="text-xs text-gray-500">
+                {TYPE_LABELS[restoreConfirm.promo_type]} · Est. profit {formatRupiah(restoreConfirm.est_profit)}
+              </p>
+            </div>
+
+            {/* Pilihan 1: Buat Ulang */}
+            <div className="border border-green-200 rounded-xl p-3 space-y-1.5">
+              <p className="text-sm font-semibold text-green-700 flex items-center gap-1.5">
+                <RefreshCw className="w-4 h-4" /> Buat Ulang Promo
+              </p>
+              <p className="text-xs text-gray-500">
+                Promo lama dihapus (jika masih ada), lalu promo baru langsung dibuat &amp; diaktifkan dari data rekomendasi ini.
+                Gunakan ini jika promonya terlanjur terhapus.
+              </p>
+              <button
+                onClick={() => handleRebuild(restoreConfirm)}
+                disabled={restoring}
+                className="w-full flex items-center justify-center gap-2 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white text-sm font-semibold rounded-lg transition-colors"
+              >
+                {restoring ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                {restoring ? 'Memproses...' : 'Buat Ulang Promo'}
+              </button>
+            </div>
+
+            {/* Pilihan 2: Reset ke Pending */}
+            <div className="border border-amber-200 rounded-xl p-3 space-y-1.5">
+              <p className="text-sm font-semibold text-amber-700 flex items-center gap-1.5">
+                <RotateCcw className="w-4 h-4" /> Kembalikan ke Pending
+              </p>
+              <p className="text-xs text-gray-500">
+                Promo yang terkait dihapus (jika masih ada). Rekomendasi kembali ke daftar Pending — bisa diedit &amp; disetujui ulang secara manual.
+              </p>
+              <button
+                onClick={() => handleRestore(restoreConfirm)}
+                disabled={restoring}
+                className="w-full flex items-center justify-center gap-2 py-2 bg-amber-500 hover:bg-amber-600 disabled:bg-amber-300 text-white text-sm font-semibold rounded-lg transition-colors"
+              >
+                {restoring ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+                {restoring ? 'Memproses...' : 'Kembalikan ke Pending'}
+              </button>
+            </div>
+
+            <button
+              onClick={() => setRestoreConfirm(null)}
+              disabled={restoring}
+              className="w-full py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+            >
+              Tutup
+            </button>
+          </div>
+        </div>
       )}
 
     </div>

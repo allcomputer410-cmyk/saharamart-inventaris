@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import {
@@ -35,7 +35,8 @@ interface ProductTrend {
 export default function TrendPage() {
   const params = useParams();
   const storeId = params.id as string;
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
   const [activeTab, setActiveTab] = useState<TabType>('fast');
   const [loading, setLoading] = useState(true);
   const [products, setProducts] = useState<ProductTrend[]>([]);
@@ -72,6 +73,7 @@ export default function TrendPage() {
             .eq('store_id', storeId)
             .eq('is_deleted', false)
             .eq('is_active', true)
+            .eq('exclude_from_report', false)
             .range(offset, offset + PAGE - 1);
           if (!page || page.length === 0) break;
           storeProducts.push(...(page as RawProduct[]));
@@ -450,9 +452,6 @@ export default function TrendPage() {
                       {activeTab === 'prediction' && (
                         <th className="px-3 py-2 text-right">Sisa Hari</th>
                       )}
-                      {activeTab === 'dead' && (
-                        <th className="px-3 py-2 text-right">Nilai Stok</th>
-                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -493,11 +492,6 @@ export default function TrendPage() {
                                 {Math.round(product.daysOfStock)} hari
                               </span>
                             ) : '-'}
-                          </td>
-                        )}
-                        {activeTab === 'dead' && (
-                          <td className="table-cell text-right text-sm text-gray-500">
-                            {formatQty(product.currentQty)} {product.unit}
                           </td>
                         )}
                       </tr>

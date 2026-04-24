@@ -21,6 +21,7 @@ import {
   ChevronDown,
   ChevronUp,
   RefreshCw,
+  RotateCcw,
 } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -169,7 +170,7 @@ function calcMarginDiscount(
   if (p3 > 0) promoPrice *= (1 - p3 / 100);
   if (p4 > 0) promoPrice *= (1 - p4 / 100);
   const marginNom = promoPrice - hpp;
-  const marginPct = hpp > 0 ? (marginNom / hpp) * 100 : 0;
+  const marginPct = promoPrice > 0 ? (marginNom / promoPrice) * 100 : 0;
   return { promoPrice, marginNom, marginPct };
 }
 
@@ -180,7 +181,8 @@ export default function PromoPage() {
   const storeId = params.id as string;
   const searchParams = useSearchParams();
   const router = useRouter();
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
   const prefillApplied = useRef(false);
 
   const [promos, setPromos] = useState<Promo[]>([]);
@@ -192,6 +194,7 @@ export default function PromoPage() {
   const [filterType, setFilterType] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [activeTab, setActiveTab] = useState<'daftar' | 'performa'>('daftar');
+  const [recsWithPromo, setRecsWithPromo] = useState<Set<string>>(new Set());
   const [discounts, setDiscounts] = useState<IposDiscount[]>([]);
   const [discountPerf, setDiscountPerf] = useState<DiscountPerf[]>([]);
   const [discountLoading, setDiscountLoading] = useState(false);
@@ -223,6 +226,17 @@ export default function PromoPage() {
       .eq('store_id', storeId)
       .order('created_at', { ascending: false });
     setPromos((data as Promo[]) || []);
+
+    const promoIds = ((data || []) as Promo[]).map((p) => p.id);
+    if (promoIds.length > 0) {
+      const { data: recs } = await supabase
+        .from('promo_recommendations')
+        .select('promotion_id')
+        .in('promotion_id', promoIds);
+      setRecsWithPromo(new Set(((recs || []) as { promotion_id: string }[]).map((r) => r.promotion_id)));
+    } else {
+      setRecsWithPromo(new Set());
+    }
     setLoading(false);
   }, [storeId, supabase]);
 
@@ -265,14 +279,14 @@ export default function PromoPage() {
 
     const [{ data: bef }, { data: dur }] = await Promise.all([
       supabase
-        .from('daily_sale_items')
-        .select('total_qty, total_revenue')
+        .from('v_sale_items_detail')
+        .select('qty_sold, revenue')
         .eq('store_product_id', disc.store_product_id)
         .gte('sale_date', before7.toISOString().split('T')[0])
         .lt('sale_date', tglDari.toISOString().split('T')[0]),
       supabase
-        .from('daily_sale_items')
-        .select('total_qty, total_revenue')
+        .from('v_sale_items_detail')
+        .select('qty_sold, revenue')
         .eq('store_product_id', disc.store_product_id)
         .gte('sale_date', tglDari.toISOString().split('T')[0])
         .lte('sale_date', disc.tgl_sampai ? disc.tgl_sampai.split('T')[0] : today),
@@ -280,10 +294,10 @@ export default function PromoPage() {
 
     setDiscountPerf((prev) => prev.map((p, i) => i !== idx ? p : {
       ...p,
-      beforeQty: (bef || []).reduce((s, r) => s + r.total_qty, 0),
-      beforeRev: (bef || []).reduce((s, r) => s + r.total_revenue, 0),
-      duringQty: (dur || []).reduce((s, r) => s + r.total_qty, 0),
-      duringRev: (dur || []).reduce((s, r) => s + r.total_revenue, 0),
+      beforeQty: (bef || []).reduce((s, r) => s + r.qty_sold, 0),
+      beforeRev: (bef || []).reduce((s, r) => s + r.revenue, 0),
+      duringQty: (dur || []).reduce((s, r) => s + r.qty_sold, 0),
+      duringRev: (dur || []).reduce((s, r) => s + r.revenue, 0),
       loaded: true,
     }));
   }, [supabase]);
@@ -433,11 +447,19 @@ export default function PromoPage() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Hapus promo ini?')) return;
-    // Reset rekomendasi yang terhubung ke promo ini → kembali ke pending
-    // (promotion_id akan di-set NULL otomatis oleh ON DELETE SET NULL setelah delete)
     await supabase
       .from('promo_recommendations')
-      .update({ status: 'pending', approved_at: null })
+      .update({ status: 'pending', approved_at: null, promotion_id: null })
+      .eq('promotion_id', id);
+    await supabase.from('promotions').delete().eq('id', id);
+    fetchPromos();
+  };
+
+  const handleReturnToRec = async (id: string) => {
+    if (!confirm('Kembalikan promo ini ke Rekomendasi Promo?\nPromo akan dihapus dan rekomendasi dikembalikan ke status pending.')) return;
+    await supabase
+      .from('promo_recommendations')
+      .update({ status: 'pending', approved_at: null, promotion_id: null })
       .eq('promotion_id', id);
     await supabase.from('promotions').delete().eq('id', id);
     fetchPromos();
@@ -622,6 +644,15 @@ export default function PromoPage() {
                         <button onClick={() => openEdit(promo)} className="text-gray-500 hover:text-blue-600 transition-colors">
                           <Pencil className="w-4 h-4" />
                         </button>
+                        {recsWithPromo.has(promo.id) && (
+                          <button
+                            onClick={() => handleReturnToRec(promo.id)}
+                            title="Kembalikan ke Rekomendasi Promo"
+                            className="text-gray-500 hover:text-amber-600 transition-colors"
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                          </button>
+                        )}
                         <button onClick={() => handleDelete(promo.id)} className="text-gray-500 hover:text-red-600 transition-colors">
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -1027,6 +1058,30 @@ export default function PromoPage() {
                   <div className="flex items-center gap-2 bg-red-50 text-red-700 px-3 py-2 rounded-lg text-sm">
                     <AlertTriangle className="w-4 h-4 shrink-0" />
                     Peringatan: Harga promo di bawah HPP — akan merugi!
+                  </div>
+                );
+                return null;
+              })()}
+
+              {formType === 'bundle' && formRule.bundle_price > 0 && formSelectedProducts.length > 0 && (() => {
+                const totalHpp = formSelectedProducts.reduce((s, p) => s + (p.store_product?.hpp || 0), 0) * (formRule.min_qty || 2);
+                if (formRule.bundle_price < totalHpp) return (
+                  <div className="flex items-center gap-2 bg-red-50 text-red-700 px-3 py-2 rounded-lg text-sm">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    Harga bundle ({formatRupiah(formRule.bundle_price)}) di bawah total HPP ({formatRupiah(totalHpp)}) — akan merugi!
+                  </div>
+                );
+                return null;
+              })()}
+
+              {formType === 'bxgy' && formSelectedProducts.length > 0 && formRule.min_qty > 0 && formRule.free_qty > 0 && (() => {
+                const prod = formSelectedProducts[0]?.store_product;
+                if (!prod) return null;
+                const profitPerSet = (formRule.min_qty * prod.sell_price) - ((formRule.min_qty + formRule.free_qty) * prod.hpp);
+                if (profitPerSet < 0) return (
+                  <div className="flex items-center gap-2 bg-red-50 text-red-700 px-3 py-2 rounded-lg text-sm">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    Beli {formRule.min_qty} Gratis {formRule.free_qty}: toko merugi {formatRupiah(-profitPerSet)} per set!
                   </div>
                 );
                 return null;

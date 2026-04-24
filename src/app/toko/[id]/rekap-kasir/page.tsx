@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import {
@@ -109,7 +109,8 @@ interface ModalProps {
 }
 
 function ModalKoreksi({ tx, onClose, onSaved }: ModalProps) {
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
   const [selected, setSelected] = useState<MetodeBayar | null>(
     tx.is_manual_override ? tx.metode_bayar : null,
   );
@@ -269,7 +270,8 @@ function ModalKoreksi({ tx, onClose, onSaved }: ModalProps) {
 export default function RekapKasirPage() {
   const params = useParams();
   const storeId = params.id as string;
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
 
   const [accessDenied, setAccessDenied] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -319,21 +321,27 @@ export default function RekapKasirPage() {
     if (accessDenied) return;
     setLoading(true);
 
-    // Supabase: fetch from view, filter by store + date range
-    const { data, error } = await supabase
-      .from('v_rekap_kasir')
-      .select('*')
-      .eq('store_id', storeId)
-      .gte('tanggal', dateFrom + 'T00:00:00')
-      .lte('tanggal', dateTo + 'T23:59:59')
-      .order('tanggal', { ascending: false })
-      .limit(2000); // fetch up to 2000, client-side pagination
-
-    if (error) {
-      console.error('Error fetching rekap kasir:', error);
-    } else {
-      setTransactions((data as RekapKasirRow[]) || []);
+    // Paginated fetch — v_rekap_kasir bisa ribuan baris untuk date range panjang
+    const PAGE = 1000;
+    const all: RekapKasirRow[] = [];
+    let offset = 0;
+    let hasMore = true;
+    let fetchError = false;
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('v_rekap_kasir')
+        .select('*')
+        .eq('store_id', storeId)
+        .gte('tanggal', dateFrom + 'T00:00:00')
+        .lte('tanggal', dateTo + 'T23:59:59')
+        .order('tanggal', { ascending: false })
+        .range(offset, offset + PAGE - 1);
+      if (error) { console.error('Error fetching rekap kasir:', error); fetchError = true; break; }
+      all.push(...((data as RekapKasirRow[]) || []));
+      hasMore = (data?.length ?? 0) === PAGE;
+      offset += PAGE;
     }
+    if (!fetchError) setTransactions(all);
 
     setPage(1);
     setLoading(false);

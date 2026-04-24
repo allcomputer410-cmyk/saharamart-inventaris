@@ -2,7 +2,7 @@
 
 export const dynamic = 'force-dynamic';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import {
   Users, Plus, Pencil, X, Loader2, ToggleLeft, ToggleRight,
@@ -94,7 +94,8 @@ const ALL_FEATURE_KEYS = FEATURE_GROUPS.flatMap(g => g.features.map(f => f.key))
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function UsersPage() {
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
 
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [stores, setStores] = useState<StoreOption[]>([]);
@@ -136,7 +137,8 @@ export default function UsersPage() {
       setCurrentUserId(user.id);
     }
     checkAuth();
-  }, [supabase]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ─── Fetch ────────────────────────────────────────────────────────────────────
 
@@ -148,12 +150,14 @@ export default function UsersPage() {
       .order('name');
     setUsers((data as unknown as UserProfile[]) || []);
     setLoading(false);
-  }, [supabase]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchStores = useCallback(async () => {
     const { data } = await supabase.from('stores').select('id, name, code').eq('is_active', true).order('name');
     setStores((data as StoreOption[]) || []);
-  }, [supabase]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => { fetchUsers(); fetchStores(); }, [fetchUsers, fetchStores]);
 

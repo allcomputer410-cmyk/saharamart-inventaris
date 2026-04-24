@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import {
@@ -45,7 +45,8 @@ const ALLOWED_ROLES = ['owner', 'manajer', 'direktur', 'gm'];
 export default function PenjualanPage() {
   const params = useParams();
   const storeId = params.id as string;
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
   const [sales, setSales] = useState<DailySalesRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [dateFrom, setDateFrom] = useState('');
@@ -307,9 +308,9 @@ export default function PenjualanPage() {
                               <th className="px-3 py-2">#</th>
                               <th className="px-3 py-2">Produk</th>
                               <th className="px-3 py-2">Barcode</th>
-                              <th className="px-3 py-2 text-right">Stok Awal</th>
+                              <th className="px-3 py-2 text-right" title="Estimasi: stok saat ini + terjual (bukan data historis)">Stok Awal*</th>
                               <th className="px-3 py-2 text-right">Qty</th>
-                              <th className="px-3 py-2 text-right">Stok Akhir</th>
+                              <th className="px-3 py-2 text-right">Stok Saat Ini</th>
                               <th className="px-3 py-2 text-right">Revenue</th>
                               <th className="px-3 py-2 text-right">HPP</th>
                               <th className="px-3 py-2 text-right">Profit</th>

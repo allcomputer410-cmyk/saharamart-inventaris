@@ -730,10 +730,14 @@ function PesananContent() {
 
   const fetchKosong = useCallback(async () => {
     setKosongLoading(true);
+    // Ambil order IDs 6 bulan terakhir saja (bukan semua historis)
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
     const { data: orderData } = await supabase
       .from('orders')
       .select('id')
-      .eq('store_id', storeId);
+      .eq('store_id', storeId)
+      .gte('order_date', sixMonthsAgo.toISOString().split('T')[0]);
 
     const orderIds = (orderData || []).map((o: Record<string, string>) => o.id);
     if (orderIds.length === 0) { setKosongGroups([]); setKosongLoading(false); return; }
@@ -842,11 +846,11 @@ function PesananContent() {
     const currentOrder = orders.find(o => o.id === orderId);
     if (!currentOrder) { setActionLoading(null); return; }
 
-    const pendingItems = currentOrder.items?.filter(
+    const pendingToReceive = currentOrder.items?.filter(
       i => i.status !== 'received' && i.status !== 'cancelled'
     ) || [];
 
-    for (const item of pendingItems) {
+    for (const item of pendingToReceive) {
       const input = document.getElementById(`qty-${item.id}`) as HTMLInputElement;
       const qty = parseFloat(input?.value || String(item.qty_ordered));
       await supabase.from('order_items').update({

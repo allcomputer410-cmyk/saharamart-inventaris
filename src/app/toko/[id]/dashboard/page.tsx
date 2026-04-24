@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import {
@@ -35,7 +35,8 @@ export default function DashboardTokoPage() {
   const params = useParams();
   const router = useRouter();
   const storeId = params.id as string;
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
 
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<DashboardStats>({
@@ -53,24 +54,13 @@ export default function DashboardTokoPage() {
     async function fetchDashboard() {
       setLoading(true);
 
-      const [productsRes, criticalRes, ordersRes, salesRes, notifsRes] = await Promise.all([
+      const [productsRes, ordersRes, salesRes, notifsRes] = await Promise.all([
         // Total products
         supabase
           .from('store_products')
           .select('id', { count: 'exact', head: true })
           .eq('store_id', storeId)
           .eq('is_deleted', false),
-
-        // Critical stock products
-        supabase
-          .from('stock')
-          .select(`
-            current_qty, min_qty, max_qty,
-            store_product:store_products(id, barcode, name, supplier:suppliers(name))
-          `)
-          .eq('store_id', storeId)
-          .order('current_qty', { ascending: true })
-          .limit(10),
 
         // Active orders
         supabase
@@ -96,27 +86,40 @@ export default function DashboardTokoPage() {
           .limit(5),
       ]);
 
-      // Process critical stock - filter items where current_qty <= min_qty
+      // Critical stock — paginated agar tidak miss jika produk > 1000
       let criticalCount = 0;
       const criticalList: CriticalProduct[] = [];
-      if (criticalRes.data) {
-        for (const row of criticalRes.data) {
-          if (row.current_qty <= row.min_qty) {
-            criticalCount++;
-            const sp = Array.isArray(row.store_product) ? row.store_product[0] : row.store_product;
-            if (sp) {
-              const sup = Array.isArray(sp.supplier) ? sp.supplier[0] : sp.supplier;
-              criticalList.push({
-                id: sp.id,
-                barcode: sp.barcode,
-                name: sp.name,
-                current_qty: row.current_qty,
-                min_qty: row.min_qty,
-                max_qty: row.max_qty,
-                supplier_name: sup?.name || null,
-              });
+      {
+        const PAGE = 1000;
+        let offset = 0;
+        while (true) {
+          const { data } = await supabase
+            .from('stock')
+            .select(`
+              current_qty, min_qty, max_qty,
+              store_product:store_products(id, barcode, name, supplier:suppliers(name))
+            `)
+            .eq('store_id', storeId)
+            .gt('min_qty', 0)
+            .order('current_qty', { ascending: true })
+            .range(offset, offset + PAGE - 1);
+          if (!data || data.length === 0) break;
+          for (const row of data) {
+            if (row.current_qty <= row.min_qty) {
+              criticalCount++;
+              const sp = Array.isArray(row.store_product) ? row.store_product[0] : row.store_product;
+              if (sp) {
+                const sup = Array.isArray(sp.supplier) ? sp.supplier[0] : sp.supplier;
+                criticalList.push({
+                  id: sp.id, barcode: sp.barcode, name: sp.name,
+                  current_qty: row.current_qty, min_qty: row.min_qty, max_qty: row.max_qty,
+                  supplier_name: sup?.name || null,
+                });
+              }
             }
           }
+          if (data.length < PAGE) break;
+          offset += PAGE;
         }
       }
 

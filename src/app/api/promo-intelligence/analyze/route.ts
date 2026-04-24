@@ -80,6 +80,7 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
         .eq('store_id', storeId)
         .eq('is_active', true)
         .eq('is_deleted', false)
+        .eq('exclude_from_report', false)
         .range(offset, offset + PAGE - 1);
       if (error || !page || page.length === 0) break;
       rawProducts = rawProducts.concat(page);
@@ -201,18 +202,24 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
   // ── Fetch produk yang sudah approved (skip duplikasi) dan baru ditolak (cooldown 7 hari)
   const sevenDaysAgo = new Date(today);
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const todayStr = today.toISOString().split('T')[0];
   const approvedProductIds = new Set<string>();
   const rejectedCooldownIds = new Set<string>();
   {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: decisions } = await (supabase as any)
       .from('promo_recommendations')
-      .select('store_product_id, status, rejected_at')
+      .select('store_product_id, status, rejected_at, promotion_id, promotions(end_date)')
       .eq('store_id', storeId)
       .in('status', ['approved', 'rejected']);
-    (decisions || []).forEach((d: { store_product_id: string; status: string; rejected_at: string | null }) => {
+    (decisions || []).forEach((d: { store_product_id: string; status: string; rejected_at: string | null; promotion_id: string | null; promotions: { end_date: string | null } | null }) => {
       if (d.status === 'approved') {
-        approvedProductIds.add(d.store_product_id);
+        // Hanya blokir jika promonya belum expired (end_date null = tidak ada batas waktu)
+        const endDate = d.promotions?.end_date ?? null;
+        if (!endDate || endDate >= todayStr) {
+          approvedProductIds.add(d.store_product_id);
+        }
+        // Jika promonya sudah expired → tidak diblokir, bisa direkomendasikan ulang
       } else if (d.status === 'rejected' && d.rejected_at && new Date(d.rejected_at) >= sevenDaysAgo) {
         rejectedCooldownIds.add(d.store_product_id);
       }

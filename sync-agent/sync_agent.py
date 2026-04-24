@@ -907,12 +907,154 @@ def sync_purchases(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str
 
 
 # ---------------------------------------------------------------------------
+# SYNC: Discounts (tbl_itemdisp → store_item_discounts)
+# ---------------------------------------------------------------------------
+def sync_discounts(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str) -> int:
+    """Sync discount data from iPOS tbl_itemdisp + tbl_itemdispdt to store_item_discounts.
+
+    Struktur iPOS:
+    - tbl_itemdisp  : header diskon (periode, hari, prioritas, status)
+    - tbl_itemdispdt: detail per-item (kodeitem, diskon1..4, disknom1..4)
+    JOIN keduanya untuk mendapatkan data lengkap per produk.
+    """
+    today = datetime.utcnow().date()
+
+    # Bersihkan state koneksi iPOS sebelum mulai
+    try:
+        ipos_conn.rollback()
+    except Exception:
+        pass
+
+    # ── Ambil data: JOIN tbl_itemdisp + tbl_itemdispdt ───────────────────────
+    try:
+        cur = ipos_conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT
+                h.iddiskon,
+                h.jenis,
+                h.merek,
+                h.tgldari,
+                h.tglsampai,
+                h.jamdari,
+                h.jamsampai,
+                h.stsact,
+                h.tipeper,
+                h.prioritas,
+                h.w1, h.w2, h.w3, h.w4, h.w5, h.w6, h.w7,
+                d.kodeitem,
+                COALESCE(d.diskon1,  0) AS diskon1,
+                COALESCE(d.diskon2,  0) AS diskon2,
+                COALESCE(d.diskon3,  0) AS diskon3,
+                COALESCE(d.diskon4,  0) AS diskon4,
+                COALESCE(d.disknom1, 0) AS disknom1,
+                COALESCE(d.disknom2, 0) AS disknom2,
+                COALESCE(d.disknom3, 0) AS disknom3,
+                COALESCE(d.disknom4, 0) AS disknom4
+            FROM tbl_itemdisp h
+            LEFT JOIN tbl_itemdispdt d ON d.iddiskon = h.iddiskon
+            ORDER BY h.tgldari DESC
+        """)
+        rows = cur.fetchall()
+        cur.close()
+    except Exception as e:
+        log.error(f"Gagal baca tbl_itemdisp/tbl_itemdispdt: {e}")
+        try:
+            ipos_conn.rollback()
+        except Exception:
+            pass
+        return 0
+
+    if not rows:
+        log.info("Tidak ada data diskon di tbl_itemdisp")
+        return 0
+
+    log.info(f"tbl_itemdisp+dt raw rows: {len(rows)}")
+
+    # ── Build product map: ipos_kodeitem → store_product_id ─────────────────
+    sp_list = sb.select_all("store_products", {
+        "store_id": f"eq.{store_id}",
+        "select": "id,ipos_kodeitem",
+    })
+    kode_to_spid = {r["ipos_kodeitem"]: r["id"] for r in sp_list if r.get("ipos_kodeitem")}
+
+    upsert_rows = []
+    for r in rows:
+        iddiskon   = safe_str(r.get("iddiskon"))
+        kodeitem   = safe_str(r.get("kodeitem"))
+        tgl_dari   = r.get("tgldari")
+        tgl_sampai = r.get("tglsampai")
+
+        if not iddiskon:
+            continue
+
+        # is_active dari stsact header, fallback cek tanggal
+        stsact = r.get("stsact")
+        if stsact is not None:
+            is_active = bool(stsact)
+        else:
+            is_active = False
+            if tgl_dari and tgl_sampai:
+                d_dari   = tgl_dari.date()   if hasattr(tgl_dari,   "date") else tgl_dari
+                d_sampai = tgl_sampai.date() if hasattr(tgl_sampai, "date") else tgl_sampai
+                is_active = d_dari <= today <= d_sampai
+            elif tgl_dari:
+                d_dari = tgl_dari.date() if hasattr(tgl_dari, "date") else tgl_dari
+                is_active = d_dari <= today
+
+        hari_berlaku = {f"w{i}": bool(r.get(f"w{i}")) for i in range(1, 8)}
+
+        upsert_rows.append({
+            "store_id":         store_id,
+            "store_product_id": kode_to_spid.get(kodeitem) if kodeitem else None,
+            "ipos_kodeitem":    kodeitem or None,
+            "ipos_iddiskon":    iddiskon,
+            "jenis":            safe_str(r.get("jenis") or r.get("tipeper")),
+            "merek":            safe_str(r.get("merek")),
+            "tgl_dari":         tgl_dari.isoformat()   if tgl_dari   and hasattr(tgl_dari,   "isoformat") else None,
+            "tgl_sampai":       tgl_sampai.isoformat() if tgl_sampai and hasattr(tgl_sampai, "isoformat") else None,
+            "jam_dari":         str(r.get("jamdari"))   if r.get("jamdari")   else None,
+            "jam_sampai":       str(r.get("jamsampai")) if r.get("jamsampai") else None,
+            "diskon1":  float(r.get("diskon1")  or 0),
+            "diskon2":  float(r.get("diskon2")  or 0),
+            "diskon3":  float(r.get("diskon3")  or 0),
+            "diskon4":  float(r.get("diskon4")  or 0),
+            "disknom1": float(r.get("disknom1") or 0),
+            "disknom2": float(r.get("disknom2") or 0),
+            "disknom3": float(r.get("disknom3") or 0),
+            "disknom4": float(r.get("disknom4") or 0),
+            "hari_berlaku": hari_berlaku,
+            "is_active":    is_active,
+            "prioritas":    int(r.get("prioritas") or 0),
+            "synced_at":    datetime.utcnow().isoformat(),
+        })
+
+    if not upsert_rows:
+        return 0
+
+    BATCH = 200
+    for i in range(0, len(upsert_rows), BATCH):
+        sb.upsert(
+            "store_item_discounts", upsert_rows[i:i+BATCH],
+            on_conflict="store_id,ipos_iddiskon,ipos_kodeitem"
+        )
+
+    log.info(f"Synced {len(upsert_rows)} discount records")
+    return len(upsert_rows)
+
+
+# ---------------------------------------------------------------------------
 # SYNC: Sales Transactions (tbl_ikhd → sales_transactions)
 # ---------------------------------------------------------------------------
 def sync_sales_transactions(ipos_conn, sb: SupabaseClient, kodekantor: str,
                              store_id: str, days_back: int = 30) -> int:
     """Sync per-transaction data from iPOS tbl_ikhd to sales_transactions."""
     log.info(f"Syncing sales transactions for store {kodekantor} (last {days_back} days)...")
+
+    # Rollback untuk bersihkan state koneksi dari fungsi sebelumnya yang mungkin aborted
+    try:
+        ipos_conn.rollback()
+    except Exception:
+        pass
 
     since_date = (date.today() - timedelta(days=days_back)).isoformat()
 
@@ -1077,6 +1219,15 @@ def _run_sync_inner(sync_type: str = "full", store_code: str = None):
                 except Exception as e:
                     log.error(f"Purchase sync failed: {e}")
                     errors.append(f"Purchases: {str(e)}")
+                    ipos_conn.rollback()
+
+            # Sync discounts (tbl_itemdisp → store_item_discounts)
+            if sync_type in ("full", "products"):
+                try:
+                    total_records += sync_discounts(ipos_conn, sb, store_id, kodekantor)
+                except Exception as e:
+                    log.error(f"Discounts sync failed: {e}")
+                    errors.append(f"Discounts: {str(e)}")
                     ipos_conn.rollback()
 
             # Sync sales transactions (per-transaksi, untuk Rekap Kasir)

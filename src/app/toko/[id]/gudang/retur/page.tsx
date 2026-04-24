@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { formatRupiah, formatDate } from '@/lib/utils';
@@ -55,7 +55,8 @@ const REASON_LABELS: Record<ReturnReason, string> = {
 export default function ReturSupplierPage() {
   const params = useParams();
   const storeId = params.id as string;
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
 
   const [history, setHistory] = useState<ReturnHistory[]>([]);
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
@@ -87,7 +88,8 @@ export default function ReturSupplierPage() {
       .limit(100);
     setHistory((data as unknown as ReturnHistory[]) || []);
     setLoading(false);
-  }, [storeId, supabase]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId]);
 
   const fetchSuppliers = useCallback(async () => {
     const { data } = await supabase
@@ -96,7 +98,8 @@ export default function ReturSupplierPage() {
       .eq('is_active', true)
       .order('name');
     setSuppliers((data as SupplierOption[]) || []);
-  }, [supabase]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchProducts = useCallback(async () => {
     const { data } = await supabase
@@ -116,7 +119,8 @@ export default function ReturSupplierPage() {
         : 0,
     }));
     setProducts(mapped);
-  }, [storeId, supabase]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId]);
 
   useEffect(() => {
     fetchHistory();

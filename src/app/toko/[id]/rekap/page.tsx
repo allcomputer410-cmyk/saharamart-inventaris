@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import {
@@ -51,7 +51,8 @@ interface RekapSupplier {
 export default function RekapPage() {
   const params = useParams();
   const storeId = params.id as string;
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
   const [loading, setLoading] = useState(true);
   const [rekap, setRekap] = useState<RekapSupplier[]>([]);
   const [expandedSupplier, setExpandedSupplier] = useState<string | null>(null);

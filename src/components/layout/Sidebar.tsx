@@ -166,6 +166,7 @@ export default function Sidebar({ storeId, storeName, isOpen, onClose, userRole 
           { label: 'Desain Promo', href: `/toko/${storeId}/desain-promo`, icon: Palette },
         ]
       : []),
+    { label: 'Laporan', href: `/toko/${storeId}/laporan`, icon: ClipboardList },
     { label: 'Pengaturan', href: `/toko/${storeId}/settings`, icon: Settings },
     { label: 'Panduan', href: `/toko/${storeId}/panduan`, icon: HelpCircle },
   ];

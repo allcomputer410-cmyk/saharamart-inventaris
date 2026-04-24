@@ -44,33 +44,31 @@ def _fix_stdout_utf8():
     """Paksa stdout/stderr Windows ke UTF-8 agar nama produk special chars aman."""
     try:
         if hasattr(sys.stdout, 'reconfigure'):
-            sys.stdout.reconfigure(encoding='utf-8', errors='ignore')
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
         elif hasattr(sys.stdout, 'buffer'):
             sys.stdout = _io.TextIOWrapper(
-                sys.stdout.buffer, encoding='utf-8', errors='ignore', line_buffering=True
+                sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True
             )
     except Exception:
         pass
     try:
         if hasattr(sys.stderr, 'reconfigure'):
-            sys.stderr.reconfigure(encoding='utf-8', errors='ignore')
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
         elif hasattr(sys.stderr, 'buffer'):
             sys.stderr = _io.TextIOWrapper(
-                sys.stderr.buffer, encoding='utf-8', errors='ignore', line_buffering=True
+                sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True
             )
     except Exception:
         pass
 
 _fix_stdout_utf8()
 
-# Format log dengan STORE_CODE agar mudah dibaca saat multi-toko
-_STORE_TAG = f"[{config.STORE_CODE}]" if config.STORE_CODE else "[ALL]"
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL, logging.INFO),
-    format=f"%(asctime)s [%(levelname)s] {_STORE_TAG} %(message)s",
+    format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("sync_agent.log", encoding="utf-8", errors="ignore"),
+        logging.FileHandler("sync_agent.log", encoding="utf-8", errors="replace"),
     ],
 )
 log = logging.getLogger("sync_agent")
@@ -209,7 +207,7 @@ def safe_str(val, fallback: str = "") -> str:
     if val is None:
         return fallback
     if isinstance(val, bytes):
-        return val.decode("utf-8", errors="ignore")
+        return val.decode("utf-8", errors="replace")
     try:
         return str(val)
     except Exception:
@@ -304,7 +302,6 @@ def sync_products(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str)
         WHERE statushapus IS NULL
            OR statushapus = ''
            OR statushapus = 'N'
-           OR statushapus = '0'
         ORDER BY kodeitem
     """)
     ipos_items = cur.fetchall()
@@ -402,10 +399,7 @@ def sync_stock(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str) ->
                     ELSE i.stokmin END AS stokmin
         FROM tbl_item i
         LEFT JOIN tbl_itemstok s ON s.kodeitem = i.kodeitem AND s.kantor = %s
-        WHERE (i.statushapus IS NULL
-           OR i.statushapus = ''
-           OR i.statushapus = 'N'
-           OR i.statushapus = '0')
+        WHERE (i.statushapus = '0' OR i.statushapus IS NULL)
     """, (kodekantor,))
     ipos_stock = cur.fetchall()
     cur.close()
@@ -421,25 +415,6 @@ def sync_stock(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str) ->
     })
     prod_map = {p["ipos_kodeitem"]: p["id"] for p in products if p.get("ipos_kodeitem")}
 
-    def _lookup_stock(kode: str) -> Optional[str]:
-        """Lookup store_product_id dengan normalisasi leading zero."""
-        if not kode:
-            return None
-        pid = prod_map.get(kode) or prod_map.get(kode.upper())
-        if pid:
-            return pid
-        stripped = kode.lstrip('0')
-        if stripped and stripped != kode:
-            pid = prod_map.get(stripped) or prod_map.get(stripped.upper())
-            if pid:
-                return pid
-        padded = kode.zfill(13)
-        if padded != kode:
-            pid = prod_map.get(padded) or prod_map.get(padded.upper())
-            if pid:
-                return pid
-        return None
-
     # Get existing stock records (select_all: bypass 1000-row limit)
     existing_stock = sb.select_all("stock", {
         "store_id": f"eq.{store_id}",
@@ -454,9 +429,10 @@ def sync_stock(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str) ->
 
     for row in ipos_stock:
         kode = str(row["kodeitem"]).strip()
-        sp_id = _lookup_stock(kode)
-        if not sp_id:
+        if kode not in prod_map:
             continue
+
+        sp_id = prod_map[kode]
         new_qty = dec(row.get("stok"))
         min_qty = dec(row.get("stokmin"))
 
@@ -538,58 +514,37 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
         cur.close()
         return 0
 
-    # Get product mapping — hanya exact key, normalisasi dilakukan saat lookup
-    # Mendaftarkan variant (lstrip/zfill) di sini justru menyebabkan produk
-    # saling overwrite satu sama lain di dict (root cause skipped items).
+    # Get product mapping — daftarkan SEMUA varian key agar lookup lebih robust
     products = sb.select_all("store_products", {
         "store_id": f"eq.{store_id}",
         "select": "id,ipos_kodeitem,barcode,hpp",
     })
     prod_map: dict = {}
+    prod_map_upper: dict = {}
+
+    def _register(key: str, p: dict):
+        """Daftarkan key dan semua variannya ke prod_map."""
+        if not key:
+            return
+        prod_map[key] = p
+        prod_map_upper[key.upper()] = p
+        # Varian tanpa leading zero (misal: "089686598025" → "89686598025")
+        stripped = key.lstrip('0')
+        if stripped and stripped != key:
+            prod_map[stripped] = p
+            prod_map_upper[stripped.upper()] = p
+        # Varian zero-padded ke 13 digit EAN (misal: "89686598025" → "089686598025")
+        padded = key.zfill(13)
+        if padded != key:
+            prod_map[padded] = p
+            prod_map_upper[padded.upper()] = p
 
     for p in products:
-        kode = str(p.get("ipos_kodeitem") or "").strip()
-        if kode:
-            prod_map[kode] = p
-        barcode = str(p.get("barcode") or "").strip()
-        if barcode and barcode not in prod_map:
-            prod_map[barcode] = p
+        # Daftarkan ipos_kodeitem DAN barcode sebagai key (keduanya, bukan salah satu)
+        _register(str(p.get("ipos_kodeitem") or "").strip(), p)
+        _register(str(p.get("barcode") or "").strip(), p)
 
-    null_count = sum(
-        1 for p in products
-        if not str(p.get("ipos_kodeitem") or "").strip()
-        and not str(p.get("barcode") or "").strip()
-    )
-    log.info(
-        f"Product map: {len(prod_map)} keys "
-        f"(dari {len(products)} produk, {null_count} tanpa kode/barcode)"
-    )
-
-    def _lookup_prod(kode: str) -> Optional[dict]:
-        """Cari produk dengan normalisasi bertahap — tanpa memodifikasi prod_map."""
-        if not kode:
-            return None
-        # 1. Exact match
-        p = prod_map.get(kode)
-        if p:
-            return p
-        # 2. Uppercase
-        p = prod_map.get(kode.upper())
-        if p:
-            return p
-        # 3. Tanpa leading zero (misal "089686010824" → "89686010824")
-        stripped = kode.lstrip('0')
-        if stripped and stripped != kode:
-            p = prod_map.get(stripped) or prod_map.get(stripped.upper())
-            if p:
-                return p
-        # 4. Zero-padded ke 13 digit EAN (misal "89686010824" → "0089686010824")
-        padded = kode.zfill(13)
-        if padded != kode:
-            p = prod_map.get(padded) or prod_map.get(padded.upper())
-            if p:
-                return p
-        return None
+    log.info(f"Product map: {len(prod_map)} keys (dari {len(products)} produk di store_products)")
 
     now = datetime.utcnow().isoformat()
     count = 0
@@ -622,7 +577,8 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
         skipped_kode_samples = []
         for item in items:
             kode = str(item["kodeitem"]).strip()
-            prod = _lookup_prod(kode)
+            # Semua varian sudah didaftarkan saat build map — cukup exact + uppercase
+            prod = prod_map.get(kode) or prod_map_upper.get(kode.upper())
             if not prod:
                 skipped += 1
                 if len(skipped_kode_samples) < 5:
@@ -951,12 +907,154 @@ def sync_purchases(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str
 
 
 # ---------------------------------------------------------------------------
+# SYNC: Discounts (tbl_itemdisp → store_item_discounts)
+# ---------------------------------------------------------------------------
+def sync_discounts(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str) -> int:
+    """Sync discount data from iPOS tbl_itemdisp + tbl_itemdispdt to store_item_discounts.
+
+    Struktur iPOS:
+    - tbl_itemdisp  : header diskon (periode, hari, prioritas, status)
+    - tbl_itemdispdt: detail per-item (kodeitem, diskon1..4, disknom1..4)
+    JOIN keduanya untuk mendapatkan data lengkap per produk.
+    """
+    today = datetime.utcnow().date()
+
+    # Bersihkan state koneksi iPOS sebelum mulai
+    try:
+        ipos_conn.rollback()
+    except Exception:
+        pass
+
+    # ── Ambil data: JOIN tbl_itemdisp + tbl_itemdispdt ───────────────────────
+    try:
+        cur = ipos_conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT
+                h.iddiskon,
+                h.jenis,
+                h.merek,
+                h.tgldari,
+                h.tglsampai,
+                h.jamdari,
+                h.jamsampai,
+                h.stsact,
+                h.tipeper,
+                h.prioritas,
+                h.w1, h.w2, h.w3, h.w4, h.w5, h.w6, h.w7,
+                d.kodeitem,
+                COALESCE(d.diskon1,  0) AS diskon1,
+                COALESCE(d.diskon2,  0) AS diskon2,
+                COALESCE(d.diskon3,  0) AS diskon3,
+                COALESCE(d.diskon4,  0) AS diskon4,
+                COALESCE(d.disknom1, 0) AS disknom1,
+                COALESCE(d.disknom2, 0) AS disknom2,
+                COALESCE(d.disknom3, 0) AS disknom3,
+                COALESCE(d.disknom4, 0) AS disknom4
+            FROM tbl_itemdisp h
+            LEFT JOIN tbl_itemdispdt d ON d.iddiskon = h.iddiskon
+            ORDER BY h.tgldari DESC
+        """)
+        rows = cur.fetchall()
+        cur.close()
+    except Exception as e:
+        log.error(f"Gagal baca tbl_itemdisp/tbl_itemdispdt: {e}")
+        try:
+            ipos_conn.rollback()
+        except Exception:
+            pass
+        return 0
+
+    if not rows:
+        log.info("Tidak ada data diskon di tbl_itemdisp")
+        return 0
+
+    log.info(f"tbl_itemdisp+dt raw rows: {len(rows)}")
+
+    # ── Build product map: ipos_kodeitem → store_product_id ─────────────────
+    sp_list = sb.select_all("store_products", {
+        "store_id": f"eq.{store_id}",
+        "select": "id,ipos_kodeitem",
+    })
+    kode_to_spid = {r["ipos_kodeitem"]: r["id"] for r in sp_list if r.get("ipos_kodeitem")}
+
+    upsert_rows = []
+    for r in rows:
+        iddiskon   = safe_str(r.get("iddiskon"))
+        kodeitem   = safe_str(r.get("kodeitem"))
+        tgl_dari   = r.get("tgldari")
+        tgl_sampai = r.get("tglsampai")
+
+        if not iddiskon:
+            continue
+
+        # is_active dari stsact header, fallback cek tanggal
+        stsact = r.get("stsact")
+        if stsact is not None:
+            is_active = bool(stsact)
+        else:
+            is_active = False
+            if tgl_dari and tgl_sampai:
+                d_dari   = tgl_dari.date()   if hasattr(tgl_dari,   "date") else tgl_dari
+                d_sampai = tgl_sampai.date() if hasattr(tgl_sampai, "date") else tgl_sampai
+                is_active = d_dari <= today <= d_sampai
+            elif tgl_dari:
+                d_dari = tgl_dari.date() if hasattr(tgl_dari, "date") else tgl_dari
+                is_active = d_dari <= today
+
+        hari_berlaku = {f"w{i}": bool(r.get(f"w{i}")) for i in range(1, 8)}
+
+        upsert_rows.append({
+            "store_id":         store_id,
+            "store_product_id": kode_to_spid.get(kodeitem) if kodeitem else None,
+            "ipos_kodeitem":    kodeitem or None,
+            "ipos_iddiskon":    iddiskon,
+            "jenis":            safe_str(r.get("jenis") or r.get("tipeper")),
+            "merek":            safe_str(r.get("merek")),
+            "tgl_dari":         tgl_dari.isoformat()   if tgl_dari   and hasattr(tgl_dari,   "isoformat") else None,
+            "tgl_sampai":       tgl_sampai.isoformat() if tgl_sampai and hasattr(tgl_sampai, "isoformat") else None,
+            "jam_dari":         str(r.get("jamdari"))   if r.get("jamdari")   else None,
+            "jam_sampai":       str(r.get("jamsampai")) if r.get("jamsampai") else None,
+            "diskon1":  float(r.get("diskon1")  or 0),
+            "diskon2":  float(r.get("diskon2")  or 0),
+            "diskon3":  float(r.get("diskon3")  or 0),
+            "diskon4":  float(r.get("diskon4")  or 0),
+            "disknom1": float(r.get("disknom1") or 0),
+            "disknom2": float(r.get("disknom2") or 0),
+            "disknom3": float(r.get("disknom3") or 0),
+            "disknom4": float(r.get("disknom4") or 0),
+            "hari_berlaku": hari_berlaku,
+            "is_active":    is_active,
+            "prioritas":    int(r.get("prioritas") or 0),
+            "synced_at":    datetime.utcnow().isoformat(),
+        })
+
+    if not upsert_rows:
+        return 0
+
+    BATCH = 200
+    for i in range(0, len(upsert_rows), BATCH):
+        sb.upsert(
+            "store_item_discounts", upsert_rows[i:i+BATCH],
+            on_conflict="store_id,ipos_iddiskon,ipos_kodeitem"
+        )
+
+    log.info(f"Synced {len(upsert_rows)} discount records")
+    return len(upsert_rows)
+
+
+# ---------------------------------------------------------------------------
 # SYNC: Sales Transactions (tbl_ikhd → sales_transactions)
 # ---------------------------------------------------------------------------
 def sync_sales_transactions(ipos_conn, sb: SupabaseClient, kodekantor: str,
                              store_id: str, days_back: int = 30) -> int:
     """Sync per-transaction data from iPOS tbl_ikhd to sales_transactions."""
     log.info(f"Syncing sales transactions for store {kodekantor} (last {days_back} days)...")
+
+    # Rollback untuk bersihkan state koneksi dari fungsi sebelumnya yang mungkin aborted
+    try:
+        ipos_conn.rollback()
+    except Exception:
+        pass
 
     since_date = (date.today() - timedelta(days=days_back)).isoformat()
 
@@ -1008,128 +1106,9 @@ def sync_sales_transactions(ipos_conn, sb: SupabaseClient, kodekantor: str,
 
 
 # ---------------------------------------------------------------------------
-# Sync discounts (tbl_itemdisp + tbl_itemdispdt)
-# ---------------------------------------------------------------------------
-def sync_discounts(ipos_conn, sb: SupabaseClient, store_id: str) -> int:
-    """Sync diskon produk dari tbl_itemdisp + tbl_itemdispdt ke store_item_discounts."""
-    cur = ipos_conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-    cur.execute("""
-        SELECT
-            d.iddiskon, d.jenis, d.merek,
-            d.tgldari, d.tglsampai,
-            d.jamdari, d.jamsampai,
-            d.pot1, d.pot2, d.pot3, d.pot4,
-            d.stsact, d.prioritas,
-            d.w1, d.w2, d.w3, d.w4, d.w5, d.w6, d.w7,
-            dt.kodeitem,
-            dt.diskon1, dt.diskon2, dt.diskon3, dt.diskon4,
-            dt.disknom1, dt.disknom2, dt.disknom3, dt.disknom4
-        FROM tbl_itemdisp d
-        JOIN tbl_itemdispdt dt ON d.iddiskon = dt.iddiskon
-        ORDER BY d.prioritas DESC, d.tgldari DESC
-    """)
-    rows = cur.fetchall()
-    cur.close()
-
-    if not rows:
-        return 0
-
-    sp_resp = sb.select("store_products", {
-        "store_id": f"eq.{store_id}",
-        "select": "id,ipos_kode",
-    })
-    kode_to_id = {sp["ipos_kode"]: sp["id"] for sp in sp_resp if sp.get("ipos_kode")}
-
-    upsert_rows = []
-    for row in rows:
-        kodeitem = safe_str(row["kodeitem"])
-        iddiskon = safe_str(row["iddiskon"])
-        if not kodeitem or not iddiskon:
-            continue
-
-        tgl_dari_dt = row["tgldari"]
-        tgl_sampai_dt = row["tglsampai"]
-        tgl_dari = tgl_dari_dt.isoformat() if tgl_dari_dt else None
-        tgl_sampai = tgl_sampai_dt.isoformat() if tgl_sampai_dt else None
-        jam_dari = str(row["jamdari"])[:8] if row["jamdari"] else None
-        jam_sampai = str(row["jamsampai"])[:8] if row["jamsampai"] else None
-
-        d1 = float(row["diskon1"] or row["pot1"] or 0)
-        d2 = float(row["diskon2"] or row["pot2"] or 0)
-        d3 = float(row["diskon3"] or row["pot3"] or 0)
-        d4 = float(row["diskon4"] or row["pot4"] or 0)
-
-        # is_active: iPOS stsact=true DAN tanggal masih dalam range
-        today = datetime.utcnow().date()
-        date_in_range = (
-            (tgl_dari_dt is None or tgl_dari_dt.date() <= today) and
-            (tgl_sampai_dt is None or tgl_sampai_dt.date() >= today)
-        )
-        is_active = bool(row["stsact"]) and date_in_range
-
-        upsert_rows.append({
-            "store_id": store_id,
-            "store_product_id": kode_to_id.get(kodeitem),
-            "ipos_kodeitem": kodeitem,
-            "ipos_iddiskon": iddiskon,
-            "jenis": safe_str(row["jenis"]),
-            "merek": safe_str(row["merek"]),
-            "tgl_dari": tgl_dari,
-            "tgl_sampai": tgl_sampai,
-            "jam_dari": jam_dari,
-            "jam_sampai": jam_sampai,
-            "diskon1": d1,
-            "diskon2": d2,
-            "diskon3": d3,
-            "diskon4": d4,
-            "disknom1": float(row["disknom1"] or 0),
-            "disknom2": float(row["disknom2"] or 0),
-            "disknom3": float(row["disknom3"] or 0),
-            "disknom4": float(row["disknom4"] or 0),
-            "hari_berlaku": {
-                "w1": bool(row["w1"]), "w2": bool(row["w2"]),
-                "w3": bool(row["w3"]), "w4": bool(row["w4"]),
-                "w5": bool(row["w5"]), "w6": bool(row["w6"]),
-                "w7": bool(row["w7"]),
-            },
-            "is_active": is_active,
-            "prioritas": int(row["prioritas"] or 0),
-            "synced_at": datetime.utcnow().isoformat(),
-        })
-
-    if not upsert_rows:
-        return 0
-
-    BATCH = 200
-    total = 0
-    for i in range(0, len(upsert_rows), BATCH):
-        batch = upsert_rows[i:i + BATCH]
-        sb.upsert("store_item_discounts", batch,
-                  on_conflict="store_id,ipos_iddiskon,ipos_kodeitem")
-        total += len(batch)
-
-    log.info(f"Discounts synced: {total} rows")
-    return total
-
-
-# ---------------------------------------------------------------------------
 # Main sync orchestration
 # ---------------------------------------------------------------------------
 LOCK_FILE = "sync.lock"
-
-
-def _is_pid_running(pid: int) -> bool:
-    """Cek apakah PID masih berjalan di Windows."""
-    try:
-        import subprocess
-        out = subprocess.check_output(
-            ['tasklist', '/FI', f'PID eq {pid}', '/NH'],
-            stderr=subprocess.DEVNULL, text=True
-        )
-        return str(pid) in out
-    except Exception:
-        return False
 
 
 def run_sync(sync_type: str = "full", store_code: str = None):
@@ -1138,18 +1117,11 @@ def run_sync(sync_type: str = "full", store_code: str = None):
     if os.path.exists(LOCK_FILE):
         try:
             with open(LOCK_FILE) as lf:
-                pid_str = lf.read().strip()
-            pid = int(pid_str)
-            if _is_pid_running(pid):
-                log.warning(f"Sync sudah berjalan (PID {pid}), skip.")
-                return
-            else:
-                # PID tidak berjalan — lock lama dari shutdown paksa, hapus dan lanjut
-                log.warning(f"Lock lama ditemukan (PID {pid} sudah mati), hapus dan lanjut sync.")
-                os.remove(LOCK_FILE)
+                pid = lf.read().strip()
+            log.warning(f"Sync sudah berjalan (PID {pid}), skip.")
         except Exception:
             log.warning("Sync sudah berjalan (lock file ada), skip.")
-            return
+        return
 
     try:
         with open(LOCK_FILE, "w") as lf:
@@ -1183,11 +1155,6 @@ def _run_sync_inner(sync_type: str = "full", store_code: str = None):
     if store_code:
         store_params["code"] = f"eq.{store_code}"
     stores = sb.select("stores", store_params)
-
-    # Python-side filter — belt and suspenders, cegah store lain masuk
-    # walau filter API gagal atau STORE_CODE di Supabase tidak match case
-    if store_code:
-        stores = [s for s in stores if s['code'] == store_code]
 
     if not stores:
         log.warning("No active stores found")
@@ -1254,6 +1221,15 @@ def _run_sync_inner(sync_type: str = "full", store_code: str = None):
                     errors.append(f"Purchases: {str(e)}")
                     ipos_conn.rollback()
 
+            # Sync discounts (tbl_itemdisp → store_item_discounts)
+            if sync_type in ("full", "products"):
+                try:
+                    total_records += sync_discounts(ipos_conn, sb, store_id, kodekantor)
+                except Exception as e:
+                    log.error(f"Discounts sync failed: {e}")
+                    errors.append(f"Discounts: {str(e)}")
+                    ipos_conn.rollback()
+
             # Sync sales transactions (per-transaksi, untuk Rekap Kasir)
             if sync_type in ("full", "sales"):
                 try:
@@ -1262,15 +1238,6 @@ def _run_sync_inner(sync_type: str = "full", store_code: str = None):
                 except Exception as e:
                     log.error(f"Sales transactions sync failed: {e}")
                     errors.append(f"SalesTransactions: {str(e)}")
-                    ipos_conn.rollback()
-
-            # Sync discounts (tbl_itemdisp + tbl_itemdispdt)
-            if sync_type in ("full", "products"):
-                try:
-                    total_records += sync_discounts(ipos_conn, sb, store_id)
-                except Exception as e:
-                    log.error(f"Discounts sync failed: {e}")
-                    errors.append(f"Discounts: {str(e)}")
                     ipos_conn.rollback()
 
             ipos_conn.close()

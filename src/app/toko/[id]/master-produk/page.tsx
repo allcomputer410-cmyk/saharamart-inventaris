@@ -16,6 +16,8 @@ import {
   Edit3,
   Check,
   AlertTriangle,
+  EyeOff,
+  Eye,
 } from 'lucide-react';
 import { formatRupiah, formatQty } from '@/lib/utils';
 import type { Category, Brand } from '@/types/database';
@@ -29,6 +31,7 @@ interface ProductRow {
   sell_price: number;
   shelf_location: string | null;
   is_active: boolean;
+  exclude_from_report: boolean;
   category: { id: string; name: string | null } | null;
   brand: { id: string; name: string | null } | null;
   supplier: { id: string; code: string; name: string } | null;
@@ -49,7 +52,8 @@ const PAGE_SIZE = 30;
 export default function MasterProdukPage() {
   const params = useParams();
   const storeId = params.id as string;
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
 
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -91,7 +95,7 @@ export default function MasterProdukPage() {
     let query = supabase
       .from('store_products')
       .select(`
-        id, barcode, name, unit, hpp, sell_price, shelf_location, is_active,
+        id, barcode, name, unit, hpp, sell_price, shelf_location, is_active, exclude_from_report,
         category:categories(id, name),
         brand:brands(id, name),
         supplier:suppliers(id, code, name),
@@ -238,6 +242,12 @@ export default function MasterProdukPage() {
       else next.add(productId);
       return next;
     });
+  };
+
+  const handleToggleExclude = async (product: ProductRow) => {
+    const newVal = !product.exclude_from_report;
+    await supabase.from('store_products').update({ exclude_from_report: newVal }).eq('id', product.id);
+    setProducts((prev) => prev.map((p) => p.id === product.id ? { ...p, exclude_from_report: newVal } : p));
   };
 
   const handlePesanStok = () => {
@@ -547,6 +557,7 @@ export default function MasterProdukPage() {
                   <th className="px-3 py-3 text-left">Supplier</th>
                   <th className="px-3 py-3 text-left">Rak</th>
                   <th className="px-3 py-3 text-center">Status</th>
+                  <th className="px-3 py-3 text-center" title="Sembunyikan dari Laporan & Rekomendasi">Laporan</th>
                 </tr>
               </thead>
               <tbody>
@@ -619,6 +630,15 @@ export default function MasterProdukPage() {
                         </td>
                         <td className="table-cell text-center">
                           <span className={stockStatus.class}>{stockStatus.label}</span>
+                        </td>
+                        <td className="table-cell text-center">
+                          <button
+                            onClick={() => handleToggleExclude(product)}
+                            title={product.exclude_from_report ? 'Disembunyikan dari laporan — klik untuk tampilkan' : 'Tampil di laporan — klik untuk sembunyikan'}
+                            className={`p-1 rounded transition-colors ${product.exclude_from_report ? 'text-orange-500 hover:text-orange-700' : 'text-gray-300 hover:text-gray-500'}`}
+                          >
+                            {product.exclude_from_report ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
                         </td>
                       </tr>
                     );

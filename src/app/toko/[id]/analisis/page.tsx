@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import {
@@ -93,7 +93,8 @@ function yesterday() {
 export default function AnalisisKeuanganPage() {
   const params = useParams();
   const storeId = params.id as string;
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
 
   // Access
   const [accessDenied, setAccessDenied] = useState(false);
@@ -152,7 +153,7 @@ export default function AnalisisKeuanganPage() {
 
     const bulanKey = firstOfMonth(dateFrom);
 
-    const [salesRes, itemsRes, marginRes, biayaRes] = await Promise.all([
+    const [salesRes, marginRes, biayaRes] = await Promise.all([
       // 1) Daily sales untuk KPI
       supabase
         .from('daily_sales')
@@ -162,23 +163,14 @@ export default function AnalisisKeuanganPage() {
         .lte('sale_date', dateTo)
         .order('sale_date', { ascending: true }),
 
-      // 2) v_sale_items_detail untuk Top 10 + Kategori
-      supabase
-        .from('v_sale_items_detail')
-        .select('*')
-        .eq('store_id', storeId)
-        .gte('sale_date', dateFrom)
-        .lte('sale_date', dateTo)
-        .range(0, 9999),
-
-      // 3) v_margin_rendah untuk Traffic Light (tidak filter tanggal — master data)
+      // 2) v_margin_rendah untuk Traffic Light (tidak filter tanggal — master data)
       supabase
         .from('v_margin_rendah')
         .select('*')
         .eq('store_id', storeId)
         .order('margin_pct', { ascending: true }),
 
-      // 4) Biaya operasional bulan ini
+      // 3) Biaya operasional bulan ini
       supabase
         .from('operational_costs')
         .select('*')
@@ -187,8 +179,26 @@ export default function AnalisisKeuanganPage() {
         .maybeSingle(),
     ]);
 
+    // Paginate v_sale_items_detail (tanpa batas hardcoded)
+    const PAGE = 1000;
+    let offset = 0;
+    const allItems: SaleItemDetail[] = [];
+    while (true) {
+      const { data: itemsBatch } = await supabase
+        .from('v_sale_items_detail')
+        .select('*')
+        .eq('store_id', storeId)
+        .gte('sale_date', dateFrom)
+        .lte('sale_date', dateTo)
+        .range(offset, offset + PAGE - 1);
+      if (!itemsBatch || itemsBatch.length === 0) break;
+      allItems.push(...(itemsBatch as SaleItemDetail[]));
+      if (itemsBatch.length < PAGE) break;
+      offset += PAGE;
+    }
+
     if (salesRes.data) setDailySales(salesRes.data);
-    if (itemsRes.data) setSaleItems(itemsRes.data as SaleItemDetail[]);
+    setSaleItems(allItems);
     if (marginRes.data) setMarginData(marginRes.data as MarginRendahRow[]);
 
     const biaya = biayaRes.data as OperationalCost | null;
@@ -207,7 +217,8 @@ export default function AnalisisKeuanganPage() {
     }
 
     setLoading(false);
-  }, [supabase, storeId, dateFrom, dateTo, accessDenied]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId, dateFrom, dateTo, accessDenied]);
 
   useEffect(() => {
     fetchAll();

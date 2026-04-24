@@ -49,7 +49,8 @@ export default function Header({ onMenuClick, pageTitle, userName = '', userRole
   const router = useRouter();
   const params = useParams();
   const storeId = (params?.id as string) || null;
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
 
   const [mounted, setMounted] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);

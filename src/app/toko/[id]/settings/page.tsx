@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Save, Loader2, ToggleLeft, ToggleRight } from 'lucide-react';
@@ -9,7 +9,8 @@ import type { Store } from '@/types/database';
 export default function SettingsPage() {
   const params = useParams();
   const storeId = params.id as string;
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
   const [store, setStore] = useState<Store | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -28,7 +29,8 @@ export default function SettingsPage() {
     }
 
     fetchStore();
-  }, [storeId, supabase]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId]);
 
   const handleSave = async () => {
     if (!store) return;

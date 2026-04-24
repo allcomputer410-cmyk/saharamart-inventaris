@@ -50,9 +50,19 @@ export async function POST(request: NextRequest) {
 
     const supabase = getAdminClient();
 
+    // Derive app URL: gunakan env var HANYA jika bukan localhost, otherwise pakai request host
+    const envUrl = process.env.NEXT_PUBLIC_APP_URL || '';
+    const appBaseUrl = envUrl && !envUrl.includes('localhost') && !envUrl.includes('127.0.0.1')
+      ? envUrl.replace(/\/$/, '')
+      : (() => {
+          const proto = request.headers.get('x-forwarded-proto') ?? 'https';
+          const host  = request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? '';
+          return `${proto}://${host}`;
+        })();
+
     // Invite via Supabase Auth — kirim email undangan ke user
     const { data: inviteData, error: inviteError } = await supabase.auth.admin.inviteUserByEmail(email, {
-      redirectTo: `${process.env.NEXT_PUBLIC_APP_URL || ''}/login`,
+      redirectTo: `${appBaseUrl}/login`,
     });
 
     if (inviteError) {
