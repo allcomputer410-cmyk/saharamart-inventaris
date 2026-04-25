@@ -59,15 +59,9 @@ export default function PenjualanPage() {
   // Cek hak akses sebelum load data
   useEffect(() => {
     async function checkAccess() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { setAccessDenied(true); return; }
-
-      const { data: profile } = await supabase
-        .from('user_profiles')
-        .select('role')
-        .eq('id', user.id)
-        .single();
-
+      const res = await fetch('/api/users/me');
+      const json = await res.json();
+      const profile = json.success ? json.data : null;
       if (!profile || !ALLOWED_ROLES.includes(profile.role)) {
         setAccessDenied(true);
         setLoading(false);
