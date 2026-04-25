@@ -11,9 +11,19 @@ export default function PilihTokoPage() {
   const supabase = createClient();
   const [stores, setStores] = useState<Store[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pendingAccount, setPendingAccount] = useState(false);
 
   useEffect(() => {
     async function fetchStores() {
+      // Cek status akun via /api/users/me
+      const meRes = await fetch('/api/users/me');
+      const meJson = await meRes.json();
+      if (meJson.success && meJson.data?.status === 'pending') {
+        setPendingAccount(true);
+        setLoading(false);
+        return;
+      }
+
       const { data, error } = await supabase
         .from('stores')
         .select('*')
@@ -29,7 +39,8 @@ export default function PilihTokoPage() {
     }
 
     fetchStores();
-  }, [supabase]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSelectStore = (storeId: string) => {
     router.push(`/toko/${storeId}/dashboard`);
@@ -39,6 +50,28 @@ export default function PilihTokoPage() {
     await supabase.auth.signOut();
     router.push('/login');
   };
+
+  if (pendingAccount) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-slate-100 flex items-center justify-center p-4">
+        <div className="w-full max-w-sm text-center">
+          <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Loader2 className="w-8 h-8 text-amber-500" />
+          </div>
+          <h2 className="text-xl font-bold text-gray-800 mb-2">Menunggu Persetujuan</h2>
+          <p className="text-sm text-gray-600 mb-6">
+            Akun kamu sedang dalam proses verifikasi oleh admin toko. Silakan coba login kembali setelah mendapat konfirmasi.
+          </p>
+          <button
+            onClick={async () => { await supabase.auth.signOut(); router.push('/login'); }}
+            className="text-sm text-red-500 hover:underline"
+          >
+            Logout
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-slate-100 p-4">

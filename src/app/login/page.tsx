@@ -120,7 +120,16 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <p className="text-center text-xs text-gray-400 mt-6">
+        <div className="text-center mt-5">
+          <p className="text-sm text-gray-500">
+            Belum punya akun?{' '}
+            <a href="/daftar" className="text-blue-600 font-medium hover:underline">
+              Daftar di sini
+            </a>
+          </p>
+        </div>
+
+        <p className="text-center text-xs text-gray-400 mt-4">
           Inventaris Multi-Toko v1.0
         </p>
       </div>

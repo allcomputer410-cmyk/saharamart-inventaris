@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client';
 import {
   Users, Plus, Pencil, X, Loader2, ToggleLeft, ToggleRight,
   ShieldCheck, Trash2, Mail, Shield, CheckSquare, Square,
+  Clock, CheckCircle, XCircle,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -107,6 +108,9 @@ export default function UsersPage() {
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
   const [currentUserRole, setCurrentUserRole] = useState<UserRole | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'active' | 'pending'>('active');
+  const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [approveRole, setApproveRole] = useState<UserRole>('supervisor');
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ msg, type });
@@ -237,6 +241,27 @@ export default function UsersPage() {
     }
   };
 
+  // ─── Approve / Reject ────────────────────────────────────────────────────────
+
+  const handleApproveReject = async (userId: string, action: 'approve' | 'reject', role?: UserRole) => {
+    setApprovingId(userId);
+    try {
+      const res = await fetch(`/api/users/register?id=${userId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, role: role || 'supervisor' }),
+      });
+      const data = await res.json();
+      if (!data.success) { showToast('Gagal: ' + data.error, 'error'); return; }
+      showToast(action === 'approve' ? 'Akun berhasil disetujui' : 'Pendaftar ditolak');
+      fetchUsers();
+    } catch {
+      showToast('Terjadi kesalahan', 'error');
+    } finally {
+      setApprovingId(null);
+    }
+  };
+
   // ─── Toggle Active ────────────────────────────────────────────────────────────
 
   const handleToggleActive = async (user: UserProfile) => {
@@ -302,86 +327,188 @@ export default function UsersPage() {
         </button>
       </div>
 
-      {/* User Table */}
-      <div className="card overflow-hidden p-0">
-        {loading ? (
-          <div className="flex items-center justify-center py-16">
-            <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+      {/* Tab */}
+      {(() => {
+        const pendingCount = users.filter((u) => (u as unknown as { status: string }).status === 'pending').length;
+        return (
+          <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
+            <button
+              onClick={() => setActiveTab('active')}
+              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'active' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              Pengguna Aktif
+            </button>
+            <button
+              onClick={() => setActiveTab('pending')}
+              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${activeTab === 'pending' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              Menunggu Persetujuan
+              {pendingCount > 0 && (
+                <span className="bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">{pendingCount}</span>
+              )}
+            </button>
           </div>
-        ) : users.length === 0 ? (
-          <div className="text-center py-16">
-            <Users className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-500 text-sm">Belum ada user.</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Nama</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Email</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Role</th>
-                  <th className="px-4 py-3 text-left font-medium text-gray-600">Toko</th>
-                  <th className="px-4 py-3 text-center font-medium text-gray-600">Akses Fitur</th>
-                  <th className="px-4 py-3 text-center font-medium text-gray-600">Status</th>
-                  <th className="px-4 py-3 text-center font-medium text-gray-600" colSpan={2}>Aksi</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {users.map((user) => {
-                  const perms = user.permissions;
-                  return (
-                    <tr key={user.id} className={`hover:bg-gray-50 ${!user.is_active ? 'opacity-50' : ''}`}>
+        );
+      })()}
+
+      {/* Tab: Pengguna Aktif */}
+      {activeTab === 'active' && (
+        <div className="card overflow-hidden p-0">
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+            </div>
+          ) : users.filter((u) => (u as unknown as { status: string }).status !== 'pending').length === 0 ? (
+            <div className="text-center py-16">
+              <Users className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+              <p className="text-gray-500 text-sm">Belum ada user.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">Nama</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">Email</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">Role</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">Toko</th>
+                    <th className="px-4 py-3 text-center font-medium text-gray-600">Akses Fitur</th>
+                    <th className="px-4 py-3 text-center font-medium text-gray-600">Status</th>
+                    <th className="px-4 py-3 text-center font-medium text-gray-600" colSpan={2}>Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {users.filter((u) => (u as unknown as { status: string }).status !== 'pending').map((user) => {
+                    const perms = user.permissions;
+                    return (
+                      <tr key={user.id} className={`hover:bg-gray-50 ${!user.is_active ? 'opacity-50' : ''}`}>
+                        <td className="px-4 py-3 font-medium text-gray-800">{user.name}</td>
+                        <td className="px-4 py-3 text-gray-600 text-xs">{user.email || '—'}</td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${ROLE_COLORS[user.role as UserRole] || 'bg-gray-100 text-gray-600'}`}>
+                            {ROLE_LABELS[user.role as UserRole] || user.role}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-gray-600 text-xs">
+                          {user.store ? `${user.store.name} (${user.store.code})` : ['direktur', 'owner'].includes(user.role) ? 'Semua Toko' : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {perms === null || perms === undefined
+                            ? <span className="text-xs text-green-600 font-medium">Akses Penuh</span>
+                            : <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
+                                <Shield className="w-3 h-3" />{perms.length} fitur
+                              </span>
+                          }
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <button onClick={() => handleToggleActive(user)} className="text-gray-500 hover:text-blue-600 transition-colors">
+                            {user.is_active ? <ToggleRight className="w-5 h-5 text-blue-600" /> : <ToggleLeft className="w-5 h-5" />}
+                          </button>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <button onClick={() => openEdit(user)} className="text-gray-500 hover:text-blue-600 transition-colors">
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {user.id !== currentUserId && (
+                            <button
+                              onClick={() => handleDelete(user)}
+                              disabled={deletingId === user.id}
+                              className="text-gray-400 hover:text-red-600 transition-colors disabled:opacity-50"
+                            >
+                              {deletingId === user.id
+                                ? <Loader2 className="w-4 h-4 animate-spin" />
+                                : <Trash2 className="w-4 h-4" />
+                              }
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab: Menunggu Persetujuan */}
+      {activeTab === 'pending' && (
+        <div className="card overflow-hidden p-0">
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+            </div>
+          ) : users.filter((u) => (u as unknown as { status: string }).status === 'pending').length === 0 ? (
+            <div className="text-center py-16">
+              <Clock className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+              <p className="text-gray-500 text-sm">Tidak ada pendaftar yang menunggu persetujuan.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">Nama</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">Email</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">Toko</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">Role</th>
+                    <th className="px-4 py-3 text-center font-medium text-gray-600">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {users.filter((u) => (u as unknown as { status: string }).status === 'pending').map((user) => (
+                    <tr key={user.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 font-medium text-gray-800">{user.name}</td>
                       <td className="px-4 py-3 text-gray-600 text-xs">{user.email || '—'}</td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${ROLE_COLORS[user.role as UserRole] || 'bg-gray-100 text-gray-600'}`}>
-                          {ROLE_LABELS[user.role as UserRole] || user.role}
-                        </span>
-                      </td>
                       <td className="px-4 py-3 text-gray-600 text-xs">
-                        {user.store ? `${user.store.name} (${user.store.code})` : ['direktur', 'owner'].includes(user.role) ? 'Semua Toko' : '—'}
+                        {user.store ? `${user.store.name} (${user.store.code})` : '—'}
                       </td>
-                      <td className="px-4 py-3 text-center">
-                        {perms === null || perms === undefined
-                          ? <span className="text-xs text-green-600 font-medium">Akses Penuh</span>
-                          : <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
-                              <Shield className="w-3 h-3" />{perms.length} fitur
-                            </span>
-                        }
+                      <td className="px-4 py-3">
+                        <select
+                          defaultValue="supervisor"
+                          onChange={(e) => setApproveRole(e.target.value as UserRole)}
+                          className="text-xs border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                          {(Object.entries(ROLE_LABELS) as [UserRole, string][]).map(([k, v]) => (
+                            <option key={k} value={k}>{v}</option>
+                          ))}
+                        </select>
                       </td>
-                      <td className="px-4 py-3 text-center">
-                        <button onClick={() => handleToggleActive(user)} className="text-gray-500 hover:text-blue-600 transition-colors">
-                          {user.is_active ? <ToggleRight className="w-5 h-5 text-blue-600" /> : <ToggleLeft className="w-5 h-5" />}
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <button onClick={() => openEdit(user)} className="text-gray-500 hover:text-blue-600 transition-colors">
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        {user.id !== currentUserId && (
+                      <td className="px-4 py-3">
+                        <div className="flex items-center justify-center gap-2">
                           <button
-                            onClick={() => handleDelete(user)}
-                            disabled={deletingId === user.id}
-                            className="text-gray-400 hover:text-red-600 transition-colors disabled:opacity-50"
+                            onClick={() => handleApproveReject(user.id, 'approve', approveRole)}
+                            disabled={approvingId === user.id}
+                            className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-xs rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
                           >
-                            {deletingId === user.id
-                              ? <Loader2 className="w-4 h-4 animate-spin" />
-                              : <Trash2 className="w-4 h-4" />
+                            {approvingId === user.id
+                              ? <Loader2 className="w-3 h-3 animate-spin" />
+                              : <CheckCircle className="w-3 h-3" />
                             }
+                            Setujui
                           </button>
-                        )}
+                          <button
+                            onClick={() => handleApproveReject(user.id, 'reject')}
+                            disabled={approvingId === user.id}
+                            className="flex items-center gap-1 px-3 py-1.5 bg-red-50 text-red-600 text-xs rounded-lg hover:bg-red-100 disabled:opacity-50 transition-colors border border-red-200"
+                          >
+                            <XCircle className="w-3 h-3" />
+                            Tolak
+                          </button>
+                        </div>
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Info box */}
       <div className="bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 text-sm text-blue-700 flex items-start gap-2">
