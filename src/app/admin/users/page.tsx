@@ -144,11 +144,13 @@ export default function UsersPage() {
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase
-      .from('user_profiles')
-      .select('*, store:stores(id, name, code)')
-      .order('name');
-    setUsers((data as unknown as UserProfile[]) || []);
+    try {
+      const res = await fetch('/api/users/invite');
+      const json = await res.json();
+      setUsers((json.data as unknown as UserProfile[]) || []);
+    } catch {
+      setUsers([]);
+    }
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -206,8 +208,13 @@ export default function UsersPage() {
       };
 
       if (editUser) {
-        const { error } = await supabase.from('user_profiles').update(payload).eq('id', editUser.id);
-        if (error) { showToast('Gagal menyimpan: ' + error.message, 'error'); return; }
+        const res = await fetch(`/api/users/invite?id=${editUser.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!data.success) { showToast('Gagal menyimpan: ' + data.error, 'error'); return; }
         showToast('User berhasil diupdate');
       } else {
         const res = await fetch('/api/users/invite', {
@@ -233,8 +240,13 @@ export default function UsersPage() {
   // ─── Toggle Active ────────────────────────────────────────────────────────────
 
   const handleToggleActive = async (user: UserProfile) => {
-    const { error } = await supabase.from('user_profiles').update({ is_active: !user.is_active }).eq('id', user.id);
-    if (!error) fetchUsers();
+    const res = await fetch(`/api/users/invite?id=${user.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_active: !user.is_active }),
+    });
+    const data = await res.json();
+    if (data.success) fetchUsers();
     else showToast('Gagal mengubah status', 'error');
   };
 

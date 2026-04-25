@@ -35,6 +35,33 @@ async function verifyCallerRole(): Promise<{ ok: boolean; error?: string }> {
   }
 }
 
+// GET /api/users/invite — Ambil semua user_profiles (bypass RLS via admin client)
+export async function GET() {
+  const auth = await verifyCallerRole();
+  if (!auth.ok) {
+    return NextResponse.json({ success: false, error: auth.error }, { status: 403 });
+  }
+
+  try {
+    const supabase = getAdminClient();
+    const { data, error } = await supabase
+      .from('user_profiles')
+      .select('*, store:stores(id, name, code)')
+      .order('name');
+
+    if (error) {
+      return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: true, data: data || [] });
+  } catch (err) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+}
+
 // POST /api/users/invite — Kirim undangan email & buat user_profiles
 export async function POST(request: NextRequest) {
   const auth = await verifyCallerRole();
@@ -92,6 +119,41 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ success: true, user_id: userId });
+  } catch (err) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+}
+
+// PATCH /api/users/invite?id=xxx — Update user_profiles (bypass RLS via admin client)
+export async function PATCH(request: NextRequest) {
+  const auth = await verifyCallerRole();
+  if (!auth.ok) {
+    return NextResponse.json({ success: false, error: auth.error }, { status: 403 });
+  }
+
+  try {
+    const { searchParams } = new URL(request.url);
+    const userId = searchParams.get('id');
+    if (!userId) {
+      return NextResponse.json({ success: false, error: 'id wajib diisi' }, { status: 400 });
+    }
+
+    const body = await request.json();
+    const supabase = getAdminClient();
+
+    const { error } = await supabase
+      .from('user_profiles')
+      .update(body)
+      .eq('id', userId);
+
+    if (error) {
+      return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: true });
   } catch (err) {
     return NextResponse.json(
       { success: false, error: err instanceof Error ? err.message : 'Unknown error' },
