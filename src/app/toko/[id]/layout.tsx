@@ -66,9 +66,24 @@ export default function StoreLayout({
         const res = await fetch('/api/users/me');
         const json = await res.json();
         if (json.success && json.data) {
-          setUserRole(json.data.role || '');
-          setUserName(json.data.name || '');
-          setUserPermissions(json.data.permissions ?? null);
+          const profile = json.data;
+          setUserRole(profile.role || '');
+          setUserName(profile.name || '');
+          const perms: string[] | null = profile.permissions ?? null;
+          setUserPermissions(perms);
+
+          // Cek akses halaman saat ini SEBELUM render konten
+          if (perms !== null) {
+            const currentSegment = window.location.pathname.split('/').pop() || '';
+            const currentMenu = STORE_MENU_ORDER.find((m) => m.segment === currentSegment);
+            if (currentMenu && !canAccess(currentMenu.permKey, perms)) {
+              const firstAccessible = STORE_MENU_ORDER.find((m) => canAccess(m.permKey, perms));
+              if (firstAccessible) {
+                router.replace(`/toko/${storeId}/${firstAccessible.segment}`);
+                return; // tetap loading sampai halaman baru terbuka
+              }
+            }
+          }
         }
       }
 
