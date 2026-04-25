@@ -52,11 +52,12 @@ export async function POST(request: NextRequest) {
 
     const supabase = getAdminClient();
 
-    // Derive app URL: gunakan env var HANYA jika bukan localhost, otherwise pakai request host
+    // Derive app URL — prioritas: env var > VERCEL_URL > request host
     const envUrl = process.env.NEXT_PUBLIC_APP_URL || '';
-    const appBaseUrl = envUrl && !envUrl.includes('localhost') && !envUrl.includes('127.0.0.1')
+    const vercelUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '';
+    const appBaseUrl = (envUrl && !envUrl.includes('localhost') && !envUrl.includes('127.0.0.1'))
       ? envUrl.replace(/\/$/, '')
-      : (() => {
+      : vercelUrl || (() => {
           const proto = request.headers.get('x-forwarded-proto') ?? 'https';
           const host  = request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? '';
           return `${proto}://${host}`;
