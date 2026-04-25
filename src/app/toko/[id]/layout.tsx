@@ -1,12 +1,35 @@
 'use client';
 
 import { useState, useEffect, useRef, useSyncExternalStore } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, usePathname, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
 import { Loader2 } from 'lucide-react';
 import type { Store } from '@/types/database';
+
+// Urutan menu toko — dipakai untuk cari halaman pertama yang bisa diakses
+const STORE_MENU_ORDER = [
+  { segment: 'dashboard',       permKey: 'dashboard' },
+  { segment: 'master-produk',   permKey: 'master_produk' },
+  { segment: 'supplier',        permKey: 'supplier' },
+  { segment: 'cek-stok',        permKey: 'cek_stok' },
+  { segment: 'pesanan',         permKey: 'pesanan' },
+  { segment: 'pembelian-masuk', permKey: 'pembelian' },
+  { segment: 'rekap',           permKey: 'rekap_supplier' },
+  { segment: 'history',         permKey: 'history' },
+  { segment: 'trend',           permKey: 'trend' },
+  { segment: 'penjualan',       permKey: 'penjualan' },
+  { segment: 'rekap-kasir',     permKey: 'rekap_kasir' },
+  { segment: 'analisis',        permKey: 'analisis_keuangan' },
+  { segment: 'promo',           permKey: 'promo' },
+  { segment: 'laporan',         permKey: 'laporan' },
+];
+
+function canAccess(permKey: string, permissions: string[] | null): boolean {
+  if (permissions === null) return true; // akses penuh
+  return permissions.includes(permKey);
+}
 
 // useSyncExternalStore: cara resmi React untuk bedakan server vs client rendering
 const emptySubscribe = () => () => {};
@@ -17,6 +40,8 @@ export default function StoreLayout({
   children: React.ReactNode;
 }) {
   const params = useParams();
+  const pathname = usePathname();
+  const router = useRouter();
   const storeId = params.id as string;
   const supabaseRef = useRef(createClient());
   const supabase = supabaseRef.current;
@@ -53,6 +78,22 @@ export default function StoreLayout({
     if (storeId) fetchData();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId]);
+
+  // Setelah profile loaded, cek apakah halaman saat ini bisa diakses
+  // Kalau tidak, redirect ke menu pertama yang boleh diakses
+  if (profileLoaded && userPermissions !== null) {
+    const currentSegment = pathname.split('/').pop() || '';
+    const currentMenu = STORE_MENU_ORDER.find((m) => m.segment === currentSegment);
+    if (currentMenu && !canAccess(currentMenu.permKey, userPermissions)) {
+      const firstAccessible = STORE_MENU_ORDER.find((m) => canAccess(m.permKey, userPermissions));
+      const target = firstAccessible
+        ? `/toko/${storeId}/${firstAccessible.segment}`
+        : null;
+      if (target && target !== pathname) {
+        router.replace(target);
+      }
+    }
+  }
 
   // Blokir render konten sampai profil & permission selesai dimuat
   if (!profileLoaded) {
