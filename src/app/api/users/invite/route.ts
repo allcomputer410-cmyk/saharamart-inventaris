@@ -18,7 +18,9 @@ async function verifyCallerRole(): Promise<{ ok: boolean; error?: string }> {
     const { data: { user } } = await serverClient.auth.getUser();
     if (!user) return { ok: false, error: 'Tidak terautentikasi' };
 
-    const { data: profile } = await serverClient
+    // Pakai admin client untuk baca profil — bypass RLS agar tidak gagal di production
+    const adminClient = getAdminClient();
+    const { data: profile } = await adminClient
       .from('user_profiles')
       .select('role')
       .eq('id', user.id)
