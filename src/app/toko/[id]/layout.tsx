@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useSyncExternalStore } from 'react';
+import { useState, useEffect, useRef, useSyncExternalStore } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import Sidebar from '@/components/layout/Sidebar';
@@ -8,7 +8,6 @@ import Header from '@/components/layout/Header';
 import type { Store } from '@/types/database';
 
 // useSyncExternalStore: cara resmi React untuk bedakan server vs client rendering
-// getServerSnapshot() dipanggil saat SSR DAN saat hydration → garantiikan tidak ada mismatch
 const emptySubscribe = () => () => {};
 
 export default function StoreLayout({
@@ -18,7 +17,8 @@ export default function StoreLayout({
 }) {
   const params = useParams();
   const storeId = params.id as string;
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
   // isClient = false saat SSR & hydration, true setelah hydration selesai
   const isClient = useSyncExternalStore(emptySubscribe, () => true, () => false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -37,20 +37,19 @@ export default function StoreLayout({
       if (storeData) setStore(storeData);
 
       if (user) {
-        const { data: profile } = await supabase
-          .from('user_profiles')
-          .select('name, role, permissions')
-          .eq('id', user.id)
-          .single();
-        if (profile?.role) setUserRole(profile.role);
-        if (profile?.name) setUserName(profile.name);
-        const p = (profile as { permissions?: string[] | null } | null)?.permissions;
-        setUserPermissions(p ?? null);
+        const res = await fetch('/api/users/me');
+        const json = await res.json();
+        if (json.success && json.data) {
+          setUserRole(json.data.role || '');
+          setUserName(json.data.name || '');
+          setUserPermissions(json.data.permissions ?? null);
+        }
       }
     }
 
     if (storeId) fetchData();
-  }, [storeId, supabase]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50">
