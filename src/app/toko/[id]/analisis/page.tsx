@@ -109,6 +109,7 @@ export default function AnalisisKeuanganPage() {
   const [saleItems, setSaleItems] = useState<SaleItemDetail[]>([]);
   const [marginData, setMarginData] = useState<MarginRendahRow[]>([]);
   const [biayaOps, setBiayaOps] = useState<OperationalCost | null>(null);
+  const [totalBiayaRange, setTotalBiayaRange] = useState(0);
 
   // UI
   const [showAllMargin, setShowAllMargin] = useState(false);
@@ -164,13 +165,13 @@ export default function AnalisisKeuanganPage() {
         .eq('store_id', storeId)
         .order('margin_pct', { ascending: true }),
 
-      // 3) Biaya operasional bulan ini
+      // 3) Biaya operasional semua bulan dalam range
       supabase
         .from('operational_costs')
         .select('*')
         .eq('store_id', storeId)
-        .eq('bulan', bulanKey)
-        .maybeSingle(),
+        .gte('bulan', firstOfMonth(dateFrom))
+        .lte('bulan', firstOfMonth(dateTo)),
     ]);
 
     // Paginate v_sale_items_detail (tanpa batas hardcoded)
@@ -195,7 +196,11 @@ export default function AnalisisKeuanganPage() {
     setSaleItems(allItems);
     if (marginRes.data) setMarginData(marginRes.data as MarginRendahRow[]);
 
-    const biaya = biayaRes.data as OperationalCost | null;
+    const biayaList = (biayaRes.data as OperationalCost[]) || [];
+    const sumBiaya = biayaList.reduce((s, b) => s + (b.total_biaya || 0), 0);
+    setTotalBiayaRange(sumBiaya);
+    // Form isi dari bulan dateFrom saja (user edit per bulan)
+    const biaya = biayaList.find(b => b.bulan === bulanKey) || null;
     setBiayaOps(biaya);
     if (biaya) {
       setBiayaForm({
@@ -225,7 +230,7 @@ export default function AnalisisKeuanganPage() {
   const kpiQty    = dailySales.reduce((s, d) => s + d.total_items_sold, 0);
   const kpiHpp    = kpiOmzet - kpiLaba;
   const kpiMargin = kpiOmzet > 0 ? ((kpiLaba / kpiOmzet) * 100) : 0;
-  const totalBiaya = biayaOps?.total_biaya ?? 0;
+  const totalBiaya = totalBiayaRange;
   const labaBersih = kpiLaba - totalBiaya;
   const modalInv   = biayaOps?.modal_investasi ?? 0;
   const roi        = modalInv > 0 ? ((labaBersih / modalInv) * 100) : 0;
@@ -242,8 +247,8 @@ export default function AnalisisKeuanganPage() {
     p.laba += item.profit;
   }
   const allProducts = Array.from(productMap.values());
-  const topByQty  = [...allProducts].sort((a, b) => b.qty  - a.qty ).slice(0, 10).reverse();
-  const topByLaba = [...allProducts].sort((a, b) => b.laba - a.laba).slice(0, 10).reverse();
+  const topByQty  = [...allProducts].sort((a, b) => b.qty  - a.qty ).slice(0, 10);
+  const topByLaba = [...allProducts].sort((a, b) => b.laba - a.laba).slice(0, 10);
 
   // ─── Kategori aggregate ───────────────────────────────────────────────────
   const katMap = new Map<string, KategoriData>();

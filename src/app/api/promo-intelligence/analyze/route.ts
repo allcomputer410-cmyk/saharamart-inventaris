@@ -147,6 +147,8 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
 
   // 3. Get sale items — query langsung by daily_sale_id (lebih reliable dari join filter)
   const saleAggMap: Record<string, SaleAgg> = {};
+  // Track unique sale dates per produk untuk hitung avgDaily yang akurat
+  const productSaleDates: Record<string, Set<string>> = {};
   if (dailySaleIds.length > 0) {
     // Batch query jika banyak daily_sale_ids (max 50 per batch untuk URL length)
     // Setiap batch juga paginated karena satu daily_sale bisa punya banyak items
@@ -170,7 +172,11 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
           }
           saleAggMap[spId].total_qty += item.qty_sold || 0;
           saleAggMap[spId].total_revenue += item.revenue || 0;
-          saleAggMap[spId].days_sold += 1;
+          if (saleDate) {
+            if (!productSaleDates[spId]) productSaleDates[spId] = new Set();
+            productSaleDates[spId].add(saleDate);
+            saleAggMap[spId].days_sold = productSaleDates[spId].size;
+          }
           if (!saleAggMap[spId].last_sale_date || saleDate > saleAggMap[spId].last_sale_date!) {
             saleAggMap[spId].last_sale_date = saleDate;
           }
@@ -307,7 +313,10 @@ async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResu
       const last = new Date(lastSaleDate);
       daysNoSale = Math.floor((today.getTime() - last.getTime()) / (1000 * 60 * 60 * 24));
     }
-    const avgDailyQty = agg ? agg.total_qty / 30 : 0;
+    // Pakai hari aktif terjual (days_sold), bukan 30 hardcoded
+    // Mencegah produk baru diklasifikasikan slow stock hanya karena belum 30 hari
+    const activeDays = agg && agg.days_sold > 0 ? agg.days_sold : 1;
+    const avgDailyQty = agg ? agg.total_qty / activeDays : 0;
 
     // ── Condition flags
     // isDeadStock: tidak terjual >30 hari ATAU produk tidak ada di data penjualan sama sekali
