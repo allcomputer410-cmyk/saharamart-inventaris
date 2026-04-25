@@ -51,22 +51,25 @@ const ROLE_LABEL: Record<string, string> = {
 
 // Peta dari href-suffix ke permission key
 const MENU_PERMISSION_MAP: Record<string, string> = {
-  'dashboard':        'dashboard',
-  'master-produk':    'master_produk',
-  'supplier':         'supplier',
-  'cek-stok':         'cek_stok',
-  'pesanan':          'pesanan',
-  'pembelian-masuk':  'pembelian',
-  'rekap':            'rekap_supplier',
-  'history':          'history',
-  'trend':            'trend',
-  'penjualan':        'penjualan',
-  'rekap-kasir':      'rekap_kasir',
-  'analisis':         'analisis_keuangan',
+  'dashboard':            'dashboard',
+  'master-produk':        'master_produk',
+  'cetak-label':          'master_produk',
+  'supplier':             'supplier',
+  'cek-stok':             'cek_stok',
+  'pesanan':              'pesanan',
+  'pembelian-masuk':      'pembelian',
+  'rekap':                'rekap_supplier',
+  'history':              'history',
+  'trend':                'trend',
+  'penjualan':            'penjualan',
+  'rekap-kasir':          'rekap_kasir',
+  'analisis':             'analisis_keuangan',
   'promo':                'promo',
   'rekomendasi-promo':    'promo',
   'desain-promo':         'promo',
-  'cetak-label':          'master_produk',
+  'laporan':              'laporan',
+  'settings':             'pengaturan',
+  'panduan':              'panduan',
 };
 
 const GLOBAL_PERMISSION_MAP: Record<string, string> = {

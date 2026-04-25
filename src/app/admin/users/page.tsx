@@ -61,13 +61,14 @@ const FEATURE_GROUPS: { label: string; features: { key: string; label: string }[
     label: 'Operasional Toko',
     features: [
       { key: 'dashboard', label: 'Dashboard Toko' },
-      { key: 'master_produk', label: 'Master Produk' },
+      { key: 'master_produk', label: 'Master Produk & Cetak Label' },
       { key: 'supplier', label: 'Daftar Supplier' },
       { key: 'cek_stok', label: 'Cek Stok' },
       { key: 'pesanan', label: 'Pesanan & Penerimaan' },
       { key: 'pembelian', label: 'Pembelian Masuk' },
       { key: 'rekap_supplier', label: 'Rekap Supplier' },
       { key: 'history', label: 'History' },
+      { key: 'laporan', label: 'Laporan' },
     ],
   },
   {
@@ -77,7 +78,14 @@ const FEATURE_GROUPS: { label: string; features: { key: string; label: string }[
       { key: 'rekap_kasir', label: 'Rekap Kasir' },
       { key: 'analisis_keuangan', label: 'Analisis Keuangan' },
       { key: 'trend', label: 'Trend & Analisis' },
-      { key: 'promo', label: 'Promo' },
+      { key: 'promo', label: 'Promo, Rekomendasi & Desain Promo' },
+    ],
+  },
+  {
+    label: 'Pengaturan',
+    features: [
+      { key: 'pengaturan', label: 'Pengaturan Toko' },
+      { key: 'panduan', label: 'Panduan' },
     ],
   },
   {

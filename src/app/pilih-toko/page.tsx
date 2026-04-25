@@ -15,21 +15,28 @@ export default function PilihTokoPage() {
 
   useEffect(() => {
     async function fetchStores() {
-      // Cek status akun via /api/users/me
+      // Ambil profil user untuk cek status dan role
       const meRes = await fetch('/api/users/me');
       const meJson = await meRes.json();
-      if (meJson.success && meJson.data?.status === 'pending') {
+      const profile = meJson.success ? meJson.data : null;
+
+      if (profile?.status === 'pending') {
         setPendingAccount(true);
         setLoading(false);
         return;
       }
 
-      const { data, error } = await supabase
-        .from('stores')
-        .select('*')
-        .eq('is_active', true)
-        .order('name');
+      const GLOBAL_ROLES = ['direktur', 'owner', 'gm'];
+      const isGlobal = profile && GLOBAL_ROLES.includes(profile.role);
 
+      let query = supabase.from('stores').select('*').eq('is_active', true).order('name');
+
+      // Non-global: filter hanya toko miliknya
+      if (!isGlobal && profile?.store_id) {
+        query = query.eq('id', profile.store_id);
+      }
+
+      const { data, error } = await query;
       if (error) {
         console.error('Error fetching stores:', error);
       } else {
