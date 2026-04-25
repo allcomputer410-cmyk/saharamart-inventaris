@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
+import { Loader2 } from 'lucide-react';
 import type { Store } from '@/types/database';
 
 // useSyncExternalStore: cara resmi React untuk bedakan server vs client rendering
@@ -19,13 +20,13 @@ export default function StoreLayout({
   const storeId = params.id as string;
   const supabaseRef = useRef(createClient());
   const supabase = supabaseRef.current;
-  // isClient = false saat SSR & hydration, true setelah hydration selesai
   const isClient = useSyncExternalStore(emptySubscribe, () => true, () => false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [store, setStore] = useState<Store | null>(null);
   const [userRole, setUserRole] = useState<string>('');
   const [userName, setUserName] = useState<string>('');
   const [userPermissions, setUserPermissions] = useState<string[] | null>(null);
+  const [profileLoaded, setProfileLoaded] = useState(false);
 
   useEffect(() => {
     async function fetchData() {
@@ -45,15 +46,28 @@ export default function StoreLayout({
           setUserPermissions(json.data.permissions ?? null);
         }
       }
+
+      setProfileLoaded(true);
     }
 
     if (storeId) fetchData();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId]);
 
+  // Blokir render konten sampai profil & permission selesai dimuat
+  if (!profileLoaded) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-50">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+          <p className="text-sm text-gray-500">Memuat data akses...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50">
-      {/* Sidebar hanya di-render setelah client mount — server selalu render null di sini */}
       {isClient && (
         <Sidebar
           storeId={storeId}
