@@ -52,6 +52,7 @@ interface AnalyzeResult {
   count: number;
   no_sale_data: boolean;
   products_with_stock: number;
+  skipped?: boolean;
   debug?: {
     raw_products: number;
     stock_records: number;
@@ -61,12 +62,27 @@ interface AnalyzeResult {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function analyzeStore(supabase: any, storeId: string): Promise<AnalyzeResult> {
+async function analyzeStore(supabase: any, storeId: string, force = false): Promise<AnalyzeResult> {
   const today = new Date();
   const _todayStr = today.toISOString().split('T')[0];
   const thirtyDaysAgo = new Date(today);
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0];
+
+  // Skip re-analysis jika sudah dijalankan < 6 jam yang lalu (kecuali force)
+  if (!force) {
+    const sixHoursAgo = new Date(today.getTime() - 6 * 60 * 60 * 1000).toISOString();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { count: recentCount } = await (supabase as any)
+      .from('promo_recommendations')
+      .select('*', { count: 'exact', head: true })
+      .eq('store_id', storeId)
+      .eq('status', 'pending')
+      .gte('analyzed_at', sixHoursAgo);
+    if (recentCount && recentCount > 0) {
+      return { count: recentCount, no_sale_data: false, products_with_stock: 0, skipped: true };
+    }
+  }
 
   // 1. Get active products with stock (paginated — PostgREST default limit = 1000, produk bisa 7000+)
   let rawProducts: { id: string; name: string; barcode: string; hpp: number; sell_price: number; category_id: string | null }[] = [];
@@ -533,13 +549,14 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
     const storeId: string | undefined = body?.store_id;
+    const force: boolean = body?.force === true;
 
     const supabase = getAdminClient();
-    const perStore: { store_id: string; recommendations: number; no_sale_data: boolean; products_with_stock: number; debug?: AnalyzeResult['debug'] }[] = [];
+    const perStore: { store_id: string; recommendations: number; no_sale_data: boolean; products_with_stock: number; skipped?: boolean; debug?: AnalyzeResult['debug'] }[] = [];
 
     if (storeId) {
-      const result = await analyzeStore(supabase, storeId);
-      perStore.push({ store_id: storeId, recommendations: result.count, no_sale_data: result.no_sale_data, products_with_stock: result.products_with_stock, debug: result.debug });
+      const result = await analyzeStore(supabase, storeId, force);
+      perStore.push({ store_id: storeId, recommendations: result.count, no_sale_data: result.no_sale_data, products_with_stock: result.products_with_stock, skipped: result.skipped, debug: result.debug });
     } else {
       // Analyze all active stores
       const { data: stores } = await supabase
@@ -548,19 +565,21 @@ export async function POST(request: NextRequest) {
         .eq('is_active', true);
 
       for (const store of stores || []) {
-        const result = await analyzeStore(supabase, store.id);
-        perStore.push({ store_id: store.id, recommendations: result.count, no_sale_data: result.no_sale_data, products_with_stock: result.products_with_stock, debug: result.debug });
+        const result = await analyzeStore(supabase, store.id, force);
+        perStore.push({ store_id: store.id, recommendations: result.count, no_sale_data: result.no_sale_data, products_with_stock: result.products_with_stock, skipped: result.skipped, debug: result.debug });
       }
     }
 
     const totalRecommendations = perStore.reduce((s, p) => s + p.recommendations, 0);
     const anyNoSaleData = perStore.some((p) => p.no_sale_data);
+    const allSkipped = perStore.length > 0 && perStore.every((p) => p.skipped);
 
     return NextResponse.json({
       success: true,
       stores_analyzed: perStore.length,
       total_recommendations: totalRecommendations,
       no_sale_data: anyNoSaleData,
+      skipped: allSkipped,
       per_store: perStore,
     });
   } catch (error) {
@@ -583,7 +602,7 @@ export async function GET() {
       .eq('is_active', true);
 
     for (const store of stores || []) {
-      const result = await analyzeStore(supabase, store.id);
+      const result = await analyzeStore(supabase, store.id, true); // cron selalu force
       perStore.push({ store_id: store.id, recommendations: result.count });
     }
 

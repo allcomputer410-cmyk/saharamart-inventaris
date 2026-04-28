@@ -661,22 +661,24 @@ export default function RekomendasiPromoPage() {
 
   useEffect(() => { fetchRecs(); fetchDiscounts(); }, [fetchRecs, fetchDiscounts]);
 
-  const handleRefresh = async () => {
+  const handleRefresh = async (force = false) => {
     setAnalyzing(true);
     try {
       const res = await fetch('/api/promo-intelligence/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ store_id: storeId }),
+        body: JSON.stringify({ store_id: storeId, force }),
       });
       const data = await res.json();
       if (data.success) {
-        if (data.total_recommendations === 0) {
+        if (data.skipped) {
+          showToast('Analisis masih terkini — data belum berubah sejak 6 jam lalu');
+        } else if (data.total_recommendations === 0) {
           setEmptyReason(data.no_sale_data ? 'no_sale_data' : 'all_normal');
           showToast('Analisis selesai — tidak ada rekomendasi baru');
         } else {
           setEmptyReason(null);
-          showToast(`Analisis selesai: ${data.total_recommendations} rekomendasi baru`);
+          showToast(`Analisis selesai: ${data.total_recommendations} rekomendasi`);
         }
         await fetchRecs();
       } else {
@@ -1030,17 +1032,28 @@ export default function RekomendasiPromoPage() {
               : 'Belum ada analisis — klik Refresh untuk memulai'}
           </p>
         </div>
-        <button
-          onClick={handleRefresh}
-          disabled={analyzing}
-          className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-60"
-        >
-          {analyzing
-            ? <Loader2 className="w-4 h-4 animate-spin" />
-            : <RefreshCw className="w-4 h-4" />
-          }
-          {analyzing ? 'Menganalisis...' : 'Refresh Analisis'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => handleRefresh(false)}
+            disabled={analyzing}
+            className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-60"
+          >
+            {analyzing
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <RefreshCw className="w-4 h-4" />
+            }
+            {analyzing ? 'Menganalisis...' : 'Refresh'}
+          </button>
+          <button
+            onClick={() => handleRefresh(true)}
+            disabled={analyzing}
+            className="flex items-center gap-2 px-3 py-2 border border-purple-300 text-purple-700 hover:bg-purple-50 text-sm font-medium rounded-lg transition-colors disabled:opacity-60"
+            title="Paksa analisis ulang meskipun data belum lama"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Analisis Ulang
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}
