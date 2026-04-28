@@ -23,6 +23,8 @@ import {
   RotateCcw,
   ExternalLink,
   Palette,
+  Plus,
+  X,
 } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -54,6 +56,14 @@ interface PromoRecommendation {
   rejected_at: string | null;
   created_at: string;
   promotion_id: string | null;
+}
+
+interface StoreProductOption {
+  id: string;
+  barcode: string;
+  name: string;
+  hpp: number;
+  sell_price: number;
 }
 
 interface DiscountInfo {
@@ -596,6 +606,19 @@ export default function RekomendasiPromoPage() {
   const [restoring, setRestoring] = useState(false);
   const [discountMap, setDiscountMap] = useState<Record<string, DiscountInfo>>({});
 
+  // State untuk tambah manual
+  const [showManualAdd, setShowManualAdd] = useState(false);
+  const [manualSearchResults, setManualSearchResults] = useState<StoreProductOption[]>([]);
+  const [manualSearchLoading, setManualSearchLoading] = useState(false);
+  const [manualSearch, setManualSearch] = useState('');
+  const [manualFocused, setManualFocused] = useState(false);
+  const [manualSelected, setManualSelected] = useState<StoreProductOption | null>(null);
+  const [manualPromoType, setManualPromoType] = useState<PromoType>('discount');
+  const [manualPriority, setManualPriority] = useState<Priority>('suggested');
+  const [manualReason, setManualReason] = useState('');
+  const [manualSaving, setManualSaving] = useState(false);
+  const manualSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
@@ -658,6 +681,68 @@ export default function RekomendasiPromoPage() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId]);
+
+  const searchManualProducts = useCallback(async (query: string) => {
+    setManualSearchLoading(true);
+    let req = supabase
+      .from('store_products')
+      .select('id, barcode, name, hpp, sell_price')
+      .eq('store_id', storeId)
+      .eq('is_deleted', false)
+      .order('name')
+      .limit(30);
+    if (query.trim()) {
+      req = req.or(`name.ilike.%${query.trim()}%,barcode.ilike.%${query.trim()}%`);
+    }
+    const { data } = await req;
+    setManualSearchResults((data as StoreProductOption[]) || []);
+    setManualSearchLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId]);
+
+  const handleManualSearchChange = (val: string) => {
+    setManualSearch(val);
+    if (manualSearchTimer.current) clearTimeout(manualSearchTimer.current);
+    manualSearchTimer.current = setTimeout(() => searchManualProducts(val), 300);
+  };
+
+  const handleManualAdd = async () => {
+    if (!manualSelected) return;
+    setManualSaving(true);
+    try {
+      await supabase.from('promo_recommendations').insert([{
+        store_id: storeId,
+        store_product_id: manualSelected.id,
+        status: 'pending',
+        priority: manualPriority,
+        promo_type: manualPromoType,
+        reason: manualReason.trim() || 'Ditambahkan manual oleh pengguna',
+        product_name: manualSelected.name,
+        product_barcode: manualSelected.barcode || '',
+        hpp: manualSelected.hpp,
+        sell_price: manualSelected.sell_price,
+        current_stock: 0,
+        days_no_sale: 0,
+        params: {},
+        est_revenue: 0,
+        est_profit: 0,
+        loss_if_no_promo: 0,
+        analyzed_at: new Date().toISOString(),
+      }]);
+      setShowManualAdd(false);
+      setManualSelected(null);
+      setManualSearch('');
+      setManualReason('');
+      setManualPromoType('discount');
+      setManualPriority('suggested');
+      await fetchRecs();
+      showToast('Produk berhasil ditambahkan ke rekomendasi promo');
+    } catch (err) {
+      showToast('Gagal menambahkan: ' + (err instanceof Error ? err.message : 'Unknown'), 'error');
+    } finally {
+      setManualSaving(false);
+    }
+  };
 
   useEffect(() => { fetchRecs(); fetchDiscounts(); }, [fetchRecs, fetchDiscounts]);
 
@@ -1034,6 +1119,13 @@ export default function RekomendasiPromoPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => { setShowManualAdd(true); searchManualProducts(''); }}
+            className="flex items-center gap-2 px-3 py-2 border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-medium rounded-lg transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Tambah Manual
+          </button>
+          <button
             onClick={() => handleRefresh(false)}
             disabled={analyzing}
             className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-60"
@@ -1285,6 +1377,146 @@ export default function RekomendasiPromoPage() {
                 className="flex-1 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-xl transition-colors"
               >
                 Ya, Buat Promo
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal Tambah Manual ──────────────────────────────────────────────── */}
+      {showManualAdd && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 py-8 px-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                <Plus className="w-4 h-4 text-purple-600" />
+                Tambah Produk Manual ke Analisis
+              </h3>
+              <button onClick={() => setShowManualAdd(false)} className="p-1 hover:bg-gray-100 rounded-lg">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            <div className="px-6 py-4 space-y-4">
+              <p className="text-xs text-gray-500">
+                Untuk produk yang tidak terdeteksi analisis otomatis tapi ingin dipromosikan.
+              </p>
+
+              {/* Pilih Produk */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Pilih Produk *</label>
+                {manualSelected ? (
+                  <div className="flex items-center gap-2 bg-purple-50 border border-purple-200 px-3 py-2 rounded-lg">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-gray-800 truncate">{manualSelected.name}</p>
+                      <p className="text-xs text-gray-500">{manualSelected.barcode} · Harga: {formatRupiah(manualSelected.sell_price)} · HPP: {formatRupiah(manualSelected.hpp)}</p>
+                    </div>
+                    <button onClick={() => { setManualSelected(null); setManualSearch(''); }} className="text-gray-400 hover:text-red-500 flex-shrink-0">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      value={manualSearch}
+                      onChange={(e) => handleManualSearchChange(e.target.value)}
+                      onFocus={() => { setManualFocused(true); searchManualProducts(manualSearch); }}
+                      onBlur={() => setTimeout(() => setManualFocused(false), 150)}
+                      placeholder="Ketik nama atau barcode produk..."
+                      className="input-field pl-9 text-sm"
+                    />
+                    {manualFocused && (
+                      <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg z-10 max-h-56 overflow-y-auto">
+                        {manualSearchLoading ? (
+                          <div className="flex items-center gap-2 px-3 py-3 text-sm text-gray-400">
+                            <Loader2 className="w-4 h-4 animate-spin" /> Mencari...
+                          </div>
+                        ) : manualSearchResults.length === 0 ? (
+                          <p className="px-3 py-3 text-sm text-gray-400">
+                            {manualSearch ? 'Produk tidak ditemukan.' : 'Ketik untuk mencari produk...'}
+                          </p>
+                        ) : (
+                          manualSearchResults.map((p) => (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => { setManualSelected(p); setManualSearch(''); }}
+                              className="w-full text-left px-3 py-2.5 hover:bg-gray-50 text-sm border-b border-gray-50 last:border-0"
+                            >
+                              <p className="font-medium text-gray-800">{p.name}</p>
+                              <p className="text-xs text-gray-400">{p.barcode} · HPP: {formatRupiah(p.hpp)}</p>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Tipe Promo */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Tipe Promo</label>
+                <select
+                  value={manualPromoType}
+                  onChange={(e) => setManualPromoType(e.target.value as PromoType)}
+                  className="input-field text-sm"
+                >
+                  {(Object.entries(TYPE_LABELS) as [PromoType, string][]).map(([k, v]) => (
+                    <option key={k} value={k}>{v}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Prioritas */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Prioritas</label>
+                <div className="flex gap-2">
+                  {(['urgent', 'suggested', 'optional'] as Priority[]).map((p) => {
+                    const cfg = PRIORITY_CONFIG[p];
+                    return (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setManualPriority(p)}
+                        className={`flex-1 py-1.5 text-xs font-medium rounded-lg border transition-colors ${manualPriority === p ? `${cfg.color} font-bold` : 'text-gray-500 border-gray-300 hover:border-gray-400'}`}
+                      >
+                        {cfg.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Alasan */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Alasan / Catatan</label>
+                <textarea
+                  value={manualReason}
+                  onChange={(e) => setManualReason(e.target.value)}
+                  placeholder="Contoh: Produk slow moving, ingin dorong penjualan sebelum expired..."
+                  rows={2}
+                  className="input-field text-sm resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 px-6 py-4 border-t border-gray-200">
+              <button
+                onClick={() => setShowManualAdd(false)}
+                className="flex-1 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleManualAdd}
+                disabled={!manualSelected || manualSaving}
+                className="flex-1 flex items-center justify-center gap-2 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white text-sm font-semibold rounded-xl transition-colors"
+              >
+                {manualSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                Tambahkan ke Analisis
               </button>
             </div>
           </div>

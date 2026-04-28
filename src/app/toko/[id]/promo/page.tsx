@@ -186,7 +186,8 @@ export default function PromoPage() {
   const prefillApplied = useRef(false);
 
   const [promos, setPromos] = useState<Promo[]>([]);
-  const [products, setProducts] = useState<StoreProductOption[]>([]);
+  const [productSearchResults, setProductSearchResults] = useState<StoreProductOption[]>([]);
+  const [productSearchLoading, setProductSearchLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editPromo, setEditPromo] = useState<Promo | null>(null);
@@ -215,6 +216,8 @@ export default function PromoPage() {
   const [formRule, setFormRule] = useState<PromoRule>(DEFAULT_RULE);
   const [formSelectedProducts, setFormSelectedProducts] = useState<PromoProduct[]>([]);
   const [formProductSearch, setFormProductSearch] = useState('');
+  const [formProductFocused, setFormProductFocused] = useState(false);
+  const productSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ─── Fetch ──────────────────────────────────────────────────────────────────
 
@@ -240,16 +243,28 @@ export default function PromoPage() {
     setLoading(false);
   }, [storeId, supabase]);
 
-  const fetchProducts = useCallback(async () => {
-    const { data } = await supabase
+  const searchProducts = useCallback(async (query: string) => {
+    setProductSearchLoading(true);
+    let req = supabase
       .from('store_products')
       .select('id, barcode, name, hpp, sell_price')
       .eq('store_id', storeId)
-      .eq('is_active', true)
       .eq('is_deleted', false)
-      .order('name');
-    setProducts((data as StoreProductOption[]) || []);
+      .order('name')
+      .limit(30);
+    if (query.trim()) {
+      req = req.or(`name.ilike.%${query.trim()}%,barcode.ilike.%${query.trim()}%`);
+    }
+    const { data } = await req;
+    setProductSearchResults((data as StoreProductOption[]) || []);
+    setProductSearchLoading(false);
   }, [storeId, supabase]);
+
+  const handleProductSearchChange = (val: string) => {
+    setFormProductSearch(val);
+    if (productSearchTimer.current) clearTimeout(productSearchTimer.current);
+    productSearchTimer.current = setTimeout(() => searchProducts(val), 300);
+  };
 
   const fetchDiscounts = useCallback(async () => {
     setDiscountLoading(true);
@@ -302,7 +317,7 @@ export default function PromoPage() {
     }));
   }, [supabase]);
 
-  useEffect(() => { fetchPromos(); fetchProducts(); }, [fetchPromos, fetchProducts]);
+  useEffect(() => { fetchPromos(); }, [fetchPromos]);
   useEffect(() => { if (activeTab === 'performa') fetchDiscounts(); }, [activeTab, fetchDiscounts]);
 
   // Pre-fill form dari URL query (dari tombol "Buat Promo Manual" di rekomendasi-promo)
@@ -473,11 +488,8 @@ export default function PromoPage() {
     return true;
   });
 
-  const filteredProductSearch = products.filter(
-    (p) =>
-      !formSelectedProducts.some((sp) => sp.store_product_id === p.id) &&
-      (p.name.toLowerCase().includes(formProductSearch.toLowerCase()) ||
-        p.barcode.toLowerCase().includes(formProductSearch.toLowerCase()))
+  const filteredProductSearch = productSearchResults.filter(
+    (p) => !formSelectedProducts.some((sp) => sp.store_product_id === p.id)
   );
 
   // ─── Margin Card ─────────────────────────────────────────────────────────────
@@ -1015,18 +1027,34 @@ export default function PromoPage() {
                   <Package className="w-4 h-4" /> Produk
                 </label>
                 <div className="relative">
-                  <input type="text" value={formProductSearch} onChange={(e) => setFormProductSearch(e.target.value)}
-                    placeholder="Cari produk (nama / barcode)..." className="input-field text-sm" />
-                  {formProductSearch && filteredProductSearch.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg z-10 max-h-48 overflow-y-auto">
-                      {filteredProductSearch.slice(0, 10).map((p) => (
-                        <button key={p.id} type="button" onClick={() => addProductToForm(p)}
-                          className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">
-                          <span className="font-medium text-gray-800">{p.name}</span>
-                          <span className="text-gray-400 text-xs ml-2">{p.barcode}</span>
-                          <span className="text-gray-400 text-xs ml-2">HPP: {formatRupiah(p.hpp)}</span>
-                        </button>
-                      ))}
+                  <input
+                    type="text"
+                    value={formProductSearch}
+                    onChange={(e) => handleProductSearchChange(e.target.value)}
+                    onFocus={() => { setFormProductFocused(true); searchProducts(formProductSearch); }}
+                    onBlur={() => setTimeout(() => setFormProductFocused(false), 150)}
+                    placeholder="Ketik nama atau barcode produk..."
+                    className="input-field text-sm"
+                  />
+                  {formProductFocused && (
+                    <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg z-10 max-h-56 overflow-y-auto">
+                      {productSearchLoading ? (
+                        <div className="flex items-center gap-2 px-3 py-3 text-sm text-gray-400">
+                          <Loader2 className="w-4 h-4 animate-spin" /> Mencari...
+                        </div>
+                      ) : filteredProductSearch.length === 0 ? (
+                        <p className="px-3 py-3 text-sm text-gray-400">
+                          {formProductSearch ? 'Produk tidak ditemukan.' : 'Ketik untuk mencari produk...'}
+                        </p>
+                      ) : (
+                        filteredProductSearch.map((p) => (
+                          <button key={p.id} type="button" onClick={() => addProductToForm(p)}
+                            className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm border-b border-gray-50 last:border-0">
+                            <p className="font-medium text-gray-800">{p.name}</p>
+                            <p className="text-xs text-gray-400">{p.barcode} · HPP: {formatRupiah(p.hpp)}</p>
+                          </button>
+                        ))
+                      )}
                     </div>
                   )}
                 </div>
