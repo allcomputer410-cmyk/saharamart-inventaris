@@ -469,11 +469,11 @@ function RecommendationCard({
           <div className="grid grid-cols-3 gap-2 text-xs">
             <div className="bg-green-50 rounded-lg px-2 py-1.5">
               <p className="text-green-600">Est. Revenue</p>
-              <p className="font-semibold text-green-700">{formatRupiah(rec.est_revenue)}</p>
+              <p className="font-semibold text-green-700">{formatRupiah(isEditing ? (editParams.est_revenue ?? rec.est_revenue) : rec.est_revenue)}</p>
             </div>
             <div className="bg-blue-50 rounded-lg px-2 py-1.5">
               <p className="text-blue-600">Est. Profit</p>
-              <p className="font-semibold text-blue-700">{formatRupiah(rec.est_profit)}</p>
+              <p className="font-semibold text-blue-700">{formatRupiah(isEditing ? (editParams.est_profit ?? rec.est_profit) : rec.est_profit)}</p>
             </div>
             <div className="bg-red-50 rounded-lg px-2 py-1.5">
               <p className="text-red-600">Rugi Jika Tdk</p>
@@ -918,19 +918,29 @@ export default function RekomendasiPromoPage() {
           const discPct = key === 'discount_pct' ? value : (updated.discount_pct ?? 0);
           const promoPrice = rec.sell_price * (1 - discPct / 100);
           updated.margin_promo_pct = promoPrice > 0 ? (promoPrice - rec.hpp) / promoPrice * 100 : -100;
+          updated.est_profit = Math.max(0, Math.round(rec.current_stock * Math.max(0, promoPrice - rec.hpp)));
+          updated.est_revenue = Math.max(0, Math.round(rec.current_stock * promoPrice));
         } else if (rec.promo_type === 'bundle') {
           const bundleDiscPct = key === 'bundle_discount_pct' ? value : (updated.bundle_discount_pct ?? 12);
           const bundlePrice = rec.sell_price * 2 * (1 - bundleDiscPct / 100);
-          updated.margin_bundle_pct = bundlePrice > 0 ? (bundlePrice - rec.hpp * 2) / bundlePrice * 100 : -100;
+          const profitBundle = bundlePrice - rec.hpp * 2;
+          updated.margin_bundle_pct = bundlePrice > 0 ? profitBundle / bundlePrice * 100 : -100;
+          updated.est_profit = Math.max(0, Math.round((rec.current_stock / 2) * Math.max(0, profitBundle)));
+          updated.est_revenue = Math.max(0, Math.round((rec.current_stock / 2) * bundlePrice));
         } else if (rec.promo_type === 'bxgy') {
           const buyQty  = key === 'buy_qty'  ? value : (updated.buy_qty  ?? 3);
           const freeQty = key === 'free_qty' ? value : (updated.free_qty ?? 1);
           const profitPerSet = (buyQty * rec.sell_price) - ((buyQty + freeQty) * rec.hpp);
           updated.margin_efektif_pct = buyQty > 0 ? profitPerSet / (buyQty * rec.sell_price) * 100 : -100;
+          updated.est_profit = Math.max(0, Math.round((rec.current_stock / (buyQty + freeQty)) * Math.max(0, profitPerSet)));
+          updated.est_revenue = Math.max(0, Math.round((rec.current_stock / (buyQty + freeQty)) * buyQty * rec.sell_price));
         } else if (rec.promo_type === 'flash_sale') {
           const flashDisc  = key === 'flash_discount_pct' ? value : (updated.flash_discount_pct ?? 10);
           const flashPrice = rec.sell_price * (1 - flashDisc / 100);
+          const quota = key === 'kuota_per_hari' ? value : (updated.kuota_per_hari ?? Number(rec.params.kuota_per_hari ?? 1));
           updated.margin_flash_pct = flashPrice > 0 ? (flashPrice - rec.hpp) / flashPrice * 100 : -100;
+          updated.est_profit = Math.max(0, Math.round(quota * 7 * Math.max(0, flashPrice - rec.hpp)));
+          updated.est_revenue = Math.max(0, Math.round(quota * 7 * flashPrice));
         } else if (rec.promo_type === 'min_purchase') {
           const minPurchase = key === 'min_purchase' ? value : (updated.min_purchase ?? rec.sell_price);
           const discNom     = key === 'discount_nom'  ? value : (updated.discount_nom  ?? 0);
