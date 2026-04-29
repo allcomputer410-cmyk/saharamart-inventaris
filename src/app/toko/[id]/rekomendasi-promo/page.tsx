@@ -618,6 +618,8 @@ export default function RekomendasiPromoPage() {
   const [manualReason, setManualReason] = useState('');
   const [manualSaving, setManualSaving] = useState(false);
   const manualSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [manualDuplicateWarning, setManualDuplicateWarning] = useState<string | null>(null);
+  const [cleaningDuplicates, setCleaningDuplicates] = useState(false);
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ msg, type });
@@ -708,6 +710,11 @@ export default function RekomendasiPromoPage() {
 
   const handleManualAdd = async () => {
     if (!manualSelected) return;
+    const existing = recs.find(r => r.store_product_id === manualSelected.id);
+    if (existing) {
+      showToast(`"${manualSelected.name}" sudah ada di analisis promo`, 'error');
+      return;
+    }
     setManualSaving(true);
     try {
       await supabase.from('promo_recommendations').insert([{
@@ -735,12 +742,46 @@ export default function RekomendasiPromoPage() {
       setManualReason('');
       setManualPromoType('discount');
       setManualPriority('suggested');
+      setManualDuplicateWarning(null);
       await fetchRecs();
       showToast('Produk berhasil ditambahkan ke rekomendasi promo');
     } catch (err) {
       showToast('Gagal menambahkan: ' + (err instanceof Error ? err.message : 'Unknown'), 'error');
     } finally {
       setManualSaving(false);
+    }
+  };
+
+  const handleCleanupDuplicates = async () => {
+    setCleaningDuplicates(true);
+    try {
+      // Kelompokkan per store_product_id, keep yang analyzed_at terbaru
+      const grouped = new Map<string, PromoRecommendation[]>();
+      for (const rec of recs) {
+        if (!grouped.has(rec.store_product_id)) grouped.set(rec.store_product_id, []);
+        grouped.get(rec.store_product_id)!.push(rec);
+      }
+      const toDelete: string[] = [];
+      for (const group of Array.from(grouped.values())) {
+        if (group.length > 1) {
+          const sorted = [...group].sort(
+            (a, b) => new Date(b.analyzed_at).getTime() - new Date(a.analyzed_at).getTime()
+          );
+          toDelete.push(...sorted.slice(1).map(r => r.id));
+        }
+      }
+      if (toDelete.length === 0) {
+        showToast('Tidak ada duplikat ditemukan');
+        return;
+      }
+      const { error } = await supabase.from('promo_recommendations').delete().in('id', toDelete);
+      if (error) throw error;
+      await fetchRecs();
+      showToast(`${toDelete.length} duplikat berhasil dihapus`);
+    } catch (err) {
+      showToast('Gagal membersihkan duplikat: ' + (err instanceof Error ? err.message : 'Unknown'), 'error');
+    } finally {
+      setCleaningDuplicates(false);
     }
   };
 
@@ -1095,6 +1136,14 @@ export default function RekomendasiPromoPage() {
   const urgentCount = recs.filter((r) => r.priority === 'urgent').length;
   const latestAnalyzedAt = recs.length > 0 ? recs[0].analyzed_at : null;
 
+  // Deteksi duplikat di state recs
+  const seenProductIds = new Set<string>();
+  let duplicateCount = 0;
+  for (const rec of recs) {
+    if (seenProductIds.has(rec.store_product_id)) duplicateCount++;
+    seenProductIds.add(rec.store_product_id);
+  }
+
   return (
     <div className="space-y-4">
       {/* Toast */}
@@ -1126,6 +1175,22 @@ export default function RekomendasiPromoPage() {
             Tambah Manual
           </button>
           <button
+            onClick={handleCleanupDuplicates}
+            disabled={cleaningDuplicates || duplicateCount === 0}
+            title={duplicateCount === 0 ? 'Tidak ada duplikat' : `${duplicateCount} duplikat ditemukan`}
+            className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border transition-colors ${
+              duplicateCount > 0
+                ? 'border-amber-400 text-amber-700 bg-amber-50 hover:bg-amber-100'
+                : 'border-gray-200 text-gray-300 cursor-not-allowed'
+            }`}
+          >
+            {cleaningDuplicates
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <AlertTriangle className="w-4 h-4" />
+            }
+            {cleaningDuplicates ? 'Membersihkan...' : `Duplikat${duplicateCount > 0 ? ` (${duplicateCount})` : ''}`}
+          </button>
+          <button
             onClick={() => handleRefresh(false)}
             disabled={analyzing}
             className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-60"
@@ -1147,6 +1212,7 @@ export default function RekomendasiPromoPage() {
           </button>
         </div>
       </div>
+
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-gray-200">
@@ -1411,7 +1477,7 @@ export default function RekomendasiPromoPage() {
                       <p className="font-medium text-gray-800 truncate">{manualSelected.name}</p>
                       <p className="text-xs text-gray-500">{manualSelected.barcode} · Harga: {formatRupiah(manualSelected.sell_price)} · HPP: {formatRupiah(manualSelected.hpp)}</p>
                     </div>
-                    <button onClick={() => { setManualSelected(null); setManualSearch(''); }} className="text-gray-400 hover:text-red-500 flex-shrink-0">
+                    <button onClick={() => { setManualSelected(null); setManualSearch(''); setManualDuplicateWarning(null); }} className="text-gray-400 hover:text-red-500 flex-shrink-0">
                       <X className="w-4 h-4" />
                     </button>
                   </div>
@@ -1438,23 +1504,50 @@ export default function RekomendasiPromoPage() {
                             {manualSearch ? 'Produk tidak ditemukan.' : 'Ketik untuk mencari produk...'}
                           </p>
                         ) : (
-                          manualSearchResults.map((p) => (
-                            <button
-                              key={p.id}
-                              type="button"
-                              onClick={() => { setManualSelected(p); setManualSearch(''); }}
-                              className="w-full text-left px-3 py-2.5 hover:bg-gray-50 text-sm border-b border-gray-50 last:border-0"
-                            >
-                              <p className="font-medium text-gray-800">{p.name}</p>
-                              <p className="text-xs text-gray-400">{p.barcode} · HPP: {formatRupiah(p.hpp)}</p>
-                            </button>
-                          ))
+                          manualSearchResults.map((p) => {
+                            const isDuplicate = recs.some(r => r.store_product_id === p.id);
+                            return (
+                              <button
+                                key={p.id}
+                                type="button"
+                                onClick={() => {
+                                  setManualSelected(p);
+                                  setManualSearch('');
+                                  setManualDuplicateWarning(isDuplicate ? p.name : null);
+                                }}
+                                className="w-full text-left px-3 py-2.5 hover:bg-gray-50 text-sm border-b border-gray-50 last:border-0"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <p className="font-medium text-gray-800">{p.name}</p>
+                                    <p className="text-xs text-gray-400">{p.barcode} · HPP: {formatRupiah(p.hpp)}</p>
+                                  </div>
+                                  {isDuplicate && (
+                                    <span className="flex-shrink-0 text-xs font-medium px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">
+                                      Sudah ada
+                                    </span>
+                                  )}
+                                </div>
+                              </button>
+                            );
+                          })
                         )}
                       </div>
                     )}
                   </div>
                 )}
               </div>
+
+              {/* Warning duplikat */}
+              {manualDuplicateWarning && (
+                <div className="flex items-start gap-2 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2.5 text-sm text-amber-800">
+                  <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-500" />
+                  <span>
+                    <strong>&ldquo;{manualDuplicateWarning}&rdquo;</strong> sudah ada di analisis promo.
+                    Pilih produk lain atau tutup modal ini.
+                  </span>
+                </div>
+              )}
 
               {/* Tipe Promo */}
               <div>
@@ -1512,7 +1605,7 @@ export default function RekomendasiPromoPage() {
               </button>
               <button
                 onClick={handleManualAdd}
-                disabled={!manualSelected || manualSaving}
+                disabled={!manualSelected || manualSaving || !!manualDuplicateWarning}
                 className="flex-1 flex items-center justify-center gap-2 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white text-sm font-semibold rounded-xl transition-colors"
               >
                 {manualSaving && <Loader2 className="w-4 h-4 animate-spin" />}
