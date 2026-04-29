@@ -620,6 +620,8 @@ export default function RekomendasiPromoPage() {
   const manualSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [manualDuplicateWarning, setManualDuplicateWarning] = useState<string | null>(null);
   const [cleaningDuplicates, setCleaningDuplicates] = useState(false);
+  const [activePromoWarning, setActivePromoWarning] = useState<{ rec: PromoRecommendation; promoName: string } | null>(null);
+  const [checkingPromo, setCheckingPromo] = useState(false);
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ msg, type });
@@ -782,6 +784,36 @@ export default function RekomendasiPromoPage() {
       showToast('Gagal membersihkan duplikat: ' + (err instanceof Error ? err.message : 'Unknown'), 'error');
     } finally {
       setCleaningDuplicates(false);
+    }
+  };
+
+  const checkAndConfirmApprove = async (rec: PromoRecommendation) => {
+    setCheckingPromo(true);
+    try {
+      const { data: ppData } = await supabase
+        .from('promo_products')
+        .select('promo_id')
+        .eq('store_product_id', rec.store_product_id);
+
+      if (ppData && ppData.length > 0) {
+        const promoIds = ppData.map((p: { promo_id: string }) => p.promo_id);
+        const { data: activePromo } = await supabase
+          .from('promotions')
+          .select('id, name')
+          .eq('store_id', storeId)
+          .eq('status', 'active')
+          .in('id', promoIds)
+          .limit(1)
+          .maybeSingle();
+
+        if (activePromo) {
+          setActivePromoWarning({ rec, promoName: activePromo.name });
+          return;
+        }
+      }
+      setApproveConfirm(rec);
+    } finally {
+      setCheckingPromo(false);
     }
   };
 
@@ -1316,7 +1348,7 @@ export default function RekomendasiPromoPage() {
                       editingId={editingId}
                       editParams={editParams}
                       discountInfo={discountMap[rec.store_product_id]}
-                      onApprove={(rec) => setApproveConfirm(rec)}
+                      onApprove={(rec) => checkAndConfirmApprove(rec)}
                       onReject={handleReject}
                       onStartEdit={handleStartEdit}
                       onSaveEdit={handleSaveEdit}
@@ -1404,6 +1436,50 @@ export default function RekomendasiPromoPage() {
             </div>
           )}
         </>
+      )}
+
+      {/* ── Modal Promo Aktif Warning ────────────────────────────────────────── */}
+      {activePromoWarning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5 text-amber-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-800">Produk Sudah Dipromosikan</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Terdapat promo aktif untuk produk ini</p>
+              </div>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm space-y-1">
+              <p className="font-medium text-gray-800">{activePromoWarning.rec.product_name}</p>
+              <p className="text-xs text-gray-500">
+                Promo aktif: <span className="font-medium text-amber-700">{activePromoWarning.promoName}</span>
+              </p>
+            </div>
+            <p className="text-xs text-gray-500">
+              Produk ini sudah memiliki promo yang sedang berjalan. Tetap lanjutkan akan membuat promo baru di samping promo yang sudah ada.
+            </p>
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setActivePromoWarning(null)}
+                className="flex-1 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors"
+              >
+                Batal
+              </button>
+              <button
+                onClick={() => {
+                  const rec = activePromoWarning.rec;
+                  setActivePromoWarning(null);
+                  setApproveConfirm(rec);
+                }}
+                className="flex-1 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold rounded-xl transition-colors"
+              >
+                Tetap Setujui
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── Modal Konfirmasi Setuju ───────────────────────────────────────────── */}
