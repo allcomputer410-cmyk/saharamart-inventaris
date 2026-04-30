@@ -621,7 +621,6 @@ export default function RekomendasiPromoPage() {
   const [manualDuplicateWarning, setManualDuplicateWarning] = useState<string | null>(null);
   const [cleaningDuplicates, setCleaningDuplicates] = useState(false);
   const [activePromoWarning, setActivePromoWarning] = useState<{ rec: PromoRecommendation; promoName: string } | null>(null);
-  const [checkingPromo, setCheckingPromo] = useState(false);
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ msg, type });
@@ -788,7 +787,6 @@ export default function RekomendasiPromoPage() {
   };
 
   const checkAndConfirmApprove = async (rec: PromoRecommendation) => {
-    setCheckingPromo(true);
     try {
       const { data: ppData } = await supabase
         .from('promo_products')
@@ -812,8 +810,9 @@ export default function RekomendasiPromoPage() {
         }
       }
       setApproveConfirm(rec);
-    } finally {
-      setCheckingPromo(false);
+    } catch {
+      // silent — lanjut ke approve confirm biasa jika query gagal
+      setApproveConfirm(rec);
     }
   };
 
