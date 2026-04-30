@@ -64,6 +64,7 @@ interface StoreProductOption {
   name: string;
   hpp: number;
   sell_price: number;
+  current_stock: number;
 }
 
 interface DiscountInfo {
@@ -689,7 +690,7 @@ export default function RekomendasiPromoPage() {
     setManualSearchLoading(true);
     let req = supabase
       .from('store_products')
-      .select('id, barcode, name, hpp, sell_price')
+      .select('id, barcode, name, hpp, sell_price, current_stock')
       .eq('store_id', storeId)
       .eq('is_deleted', false)
       .order('name')
@@ -729,7 +730,7 @@ export default function RekomendasiPromoPage() {
         product_barcode: manualSelected.barcode || '',
         hpp: manualSelected.hpp,
         sell_price: manualSelected.sell_price,
-        current_stock: 0,
+        current_stock: manualSelected.current_stock ?? 0,
         days_no_sale: 0,
         params: {},
         est_revenue: 0,
