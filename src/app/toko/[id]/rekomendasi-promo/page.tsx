@@ -241,6 +241,7 @@ function RecommendationCard({
   onApprove,
   onReject,
   onStartEdit,
+  onCancelEdit,
   onSaveEdit,
   onEditParamChange,
   onOpenPromoForm,
@@ -253,6 +254,7 @@ function RecommendationCard({
   onApprove: (rec: PromoRecommendation) => void;
   onReject: (id: string) => void;
   onStartEdit: (rec: PromoRecommendation) => void;
+  onCancelEdit: () => void;
   onSaveEdit: (rec: PromoRecommendation) => void;
   onEditParamChange: (key: string, value: number) => void;
   onOpenPromoForm: (rec: PromoRecommendation) => void;
@@ -523,7 +525,7 @@ function RecommendationCard({
               Simpan &amp; Setuju
             </button>
             <button
-              onClick={() => onStartEdit({ ...rec, params: {} } as PromoRecommendation)}
+              onClick={onCancelEdit}
               className="px-3 py-2 border border-gray-300 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-50 transition-colors"
             >
               Batal
@@ -1053,19 +1055,30 @@ export default function RekomendasiPromoPage() {
     router.push(`/toko/${storeId}/desain-promo?${q.toString()}`);
   };
 
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setEditParams({});
+  };
+
   const handleStartEdit = (rec: PromoRecommendation) => {
-    if (!rec.params || Object.keys(rec.params).length === 0) {
-      // Cancel edit
-      setEditingId(null);
-      setEditParams({});
-      return;
-    }
     setEditingId(rec.id);
-    const numParams: Record<string, number> = {};
-    Object.entries(rec.params).forEach(([k, v]) => {
-      if (typeof v === 'number') numParams[k] = v;
-    });
-    setEditParams(numParams);
+    if (rec.params && Object.keys(rec.params).length > 0) {
+      const numParams: Record<string, number> = {};
+      Object.entries(rec.params).forEach(([k, v]) => {
+        if (typeof v === 'number') numParams[k] = v;
+      });
+      setEditParams(numParams);
+    } else {
+      // Item manual — pakai default params sesuai tipe promo
+      const defaults: Record<string, number> =
+        rec.promo_type === 'discount'     ? { discount_pct: 10 } :
+        rec.promo_type === 'bundle'       ? { bundle_discount_pct: 12, bundle_qty: 2 } :
+        rec.promo_type === 'bxgy'         ? { buy_qty: 3, free_qty: 1 } :
+        rec.promo_type === 'flash_sale'   ? { flash_discount_pct: 10, kuota_per_hari: 10 } :
+        rec.promo_type === 'min_purchase' ? { min_purchase: rec.sell_price, discount_nom: 0 } :
+        {};
+      setEditParams(defaults);
+    }
   };
 
   const handleEditParamChange = (key: string, value: number) => {
@@ -1351,6 +1364,7 @@ export default function RekomendasiPromoPage() {
                       onApprove={(rec) => checkAndConfirmApprove(rec)}
                       onReject={handleReject}
                       onStartEdit={handleStartEdit}
+                      onCancelEdit={handleCancelEdit}
                       onSaveEdit={handleSaveEdit}
                       onEditParamChange={handleEditParamChange}
                       onOpenPromoForm={handleOpenPromoForm}
