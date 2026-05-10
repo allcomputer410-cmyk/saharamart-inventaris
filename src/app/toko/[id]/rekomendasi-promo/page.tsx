@@ -26,6 +26,9 @@ import {
   Plus,
   X,
   Camera,
+  ShoppingCart,
+  Save,
+  Trash2,
 } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -57,6 +60,7 @@ interface PromoRecommendation {
   rejected_at: string | null;
   created_at: string;
   promotion_id: string | null;
+  in_cart: boolean;
 }
 
 interface StoreProductOption {
@@ -247,6 +251,7 @@ function RecommendationCard({
   onEditParamChange,
   onOpenPromoForm,
   onMakePoster,
+  onToggleCart,
 }: {
   rec: PromoRecommendation;
   editingId: string | null;
@@ -260,6 +265,7 @@ function RecommendationCard({
   onEditParamChange: (key: string, value: number) => void;
   onOpenPromoForm: (rec: PromoRecommendation) => void;
   onMakePoster: (rec: PromoRecommendation) => void;
+  onToggleCart: (rec: PromoRecommendation) => void;
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const isEditing = editingId === rec.id;
@@ -288,6 +294,12 @@ function RecommendationCard({
             </div>
             <div className="flex items-center gap-1.5 flex-wrap mt-1">
               <h3 className="font-semibold text-gray-800 truncate">{rec.product_name}</h3>
+              {rec.in_cart && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-indigo-100 text-indigo-700 text-xs font-medium rounded-full flex-shrink-0">
+                  <ShoppingCart className="w-3 h-3" />
+                  Di Keranjang
+                </span>
+              )}
               {discountInfo && (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-orange-100 text-orange-700 text-xs font-medium rounded-full flex-shrink-0">
                   <Tag className="w-3 h-3" />
@@ -581,6 +593,17 @@ function RecommendationCard({
       {/* Shortcut buttons */}
       <div className="border-t border-gray-100 pt-2 flex gap-1">
         <button
+          onClick={() => onToggleCart(rec)}
+          className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors border ${
+            rec.in_cart
+              ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+              : 'text-gray-500 border-gray-200 hover:text-indigo-600 hover:bg-indigo-50 hover:border-indigo-200'
+          }`}
+        >
+          <ShoppingCart className="w-3 h-3" />
+          {rec.in_cart ? 'Keluarkan' : 'Keranjang'}
+        </button>
+        <button
           onClick={() => onOpenPromoForm(rec)}
           className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
         >
@@ -592,9 +615,257 @@ function RecommendationCard({
           className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs text-purple-600 hover:text-purple-700 hover:bg-purple-50 rounded-lg transition-colors border border-purple-200"
         >
           <Palette className="w-3 h-3" />
-          Buat Poster
+          Poster
         </button>
       </div>
+    </div>
+  );
+}
+
+// ─── Cart Card ───────────────────────────────────────────────────────────────
+
+function CartCard({
+  rec,
+  editingId,
+  editParams,
+  onStartEdit,
+  onCancelEdit,
+  onEditParamChange,
+  onSaveCartParams,
+  onApprove,
+  onRemoveFromCart,
+  saving,
+}: {
+  rec: PromoRecommendation;
+  editingId: string | null;
+  editParams: Record<string, number>;
+  onStartEdit: (rec: PromoRecommendation) => void;
+  onCancelEdit: () => void;
+  onEditParamChange: (key: string, value: number) => void;
+  onSaveCartParams: (rec: PromoRecommendation) => void;
+  onApprove: (rec: PromoRecommendation) => void;
+  onRemoveFromCart: (rec: PromoRecommendation) => void;
+  saving: boolean;
+}) {
+  const isEditing = editingId === rec.id;
+  const pc = PRIORITY_CONFIG[rec.priority] ?? PRIORITY_CONFIG.optional;
+  const marginPct = isEditing
+    ? (editParams.margin_promo_pct ?? editParams.margin_bundle_pct ?? editParams.margin_flash_pct ?? editParams.margin_efektif_pct ?? 0)
+    : Number(rec.params.margin_promo_pct ?? rec.params.margin_bundle_pct ?? rec.params.margin_flash_pct ?? rec.params.margin_efektif_pct ?? 0);
+
+  const hasSavedParams = rec.params && Object.keys(rec.params).filter(k => k !== 'nama_promo').length > 0;
+
+  return (
+    <div className={`card border ${pc.color} space-y-3`}>
+      {/* Header */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className={`text-xs font-bold px-2 py-0.5 rounded border ${pc.color}`}>{pc.label}</span>
+            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${TYPE_COLORS[rec.promo_type]}`}>{TYPE_LABELS[rec.promo_type]}</span>
+          </div>
+          <h3 className="font-semibold text-gray-800 mt-1">{rec.product_name}</h3>
+          {rec.product_barcode && <p className="text-xs text-gray-400">{rec.product_barcode}</p>}
+        </div>
+        <button
+          onClick={() => onRemoveFromCart(rec)}
+          className="p-1 text-gray-400 hover:text-red-500 flex-shrink-0"
+          title="Keluarkan dari keranjang"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Stats ringkas */}
+      <div className="grid grid-cols-3 gap-2 text-xs">
+        <div className="bg-gray-50 rounded-lg px-2 py-1.5">
+          <p className="text-gray-400">HPP</p>
+          <p className="font-semibold text-gray-700">{formatRupiah(rec.hpp)}</p>
+        </div>
+        <div className="bg-gray-50 rounded-lg px-2 py-1.5">
+          <p className="text-gray-400">Harga Jual</p>
+          <p className="font-semibold text-gray-700">{formatRupiah(rec.sell_price)}</p>
+        </div>
+        <div className="bg-gray-50 rounded-lg px-2 py-1.5">
+          <p className="text-gray-400">Stok</p>
+          <p className="font-semibold text-gray-700">{rec.current_stock} pcs</p>
+        </div>
+      </div>
+
+      {/* Parameter — edit mode atau tampil saved */}
+      <div className="border-t border-gray-100 pt-2 space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-semibold text-gray-600">Parameter Promo</p>
+          {!isEditing && (
+            <button
+              onClick={() => onStartEdit(rec)}
+              className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium"
+            >
+              <SlidersHorizontal className="w-3 h-3" /> Ubah
+            </button>
+          )}
+        </div>
+
+        {isEditing ? (
+          <div className="space-y-2">
+            {rec.promo_type === 'discount' && (
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <label className="text-gray-500 block mb-0.5">Diskon (%)</label>
+                  <input type="number" min="1" max="90" step="0.1"
+                    value={editParams.discount_pct ?? 0}
+                    onChange={(e) => onEditParamChange('discount_pct', parseFloat(e.target.value) || 0)}
+                    className="input-field py-1 text-xs" />
+                </div>
+                <div>
+                  <label className="text-gray-500 block mb-0.5">Harga Promo</label>
+                  <div className="flex items-center gap-1.5 pt-1">
+                    <p className="font-semibold text-gray-700">
+                      {formatRupiah(rec.sell_price * (1 - (editParams.discount_pct ?? 0) / 100))}
+                    </p>
+                    <button type="button" onClick={() => {
+                      const promoPrice = rec.sell_price * (1 - (editParams.discount_pct ?? 0) / 100);
+                      const rounded = Math.floor(promoPrice / 500) * 500;
+                      if (rounded > 0 && rounded !== promoPrice) {
+                        const newDisc = (1 - rounded / rec.sell_price) * 100;
+                        onEditParamChange('discount_pct', parseFloat(newDisc.toFixed(2)));
+                      }
+                    }} className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 hover:bg-blue-200 rounded font-medium">↓500</button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {rec.promo_type === 'bundle' && (
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <label className="text-gray-500 block mb-0.5">Diskon Bundle (%)</label>
+                  <input type="number" min="1" max="50" step="0.1"
+                    value={editParams.bundle_discount_pct ?? 12}
+                    onChange={(e) => onEditParamChange('bundle_discount_pct', parseFloat(e.target.value) || 0)}
+                    className="input-field py-1 text-xs" />
+                </div>
+                <div>
+                  <label className="text-gray-500 block mb-0.5">Harga Bundle</label>
+                  <p className="font-semibold text-gray-700 pt-1">
+                    {formatRupiah(rec.sell_price * 2 * (1 - (editParams.bundle_discount_pct ?? 12) / 100))}
+                  </p>
+                </div>
+              </div>
+            )}
+            {rec.promo_type === 'bxgy' && (
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <label className="text-gray-500 block mb-0.5">Beli (qty)</label>
+                  <input type="number" min="1" max="10"
+                    value={editParams.buy_qty ?? 3}
+                    onChange={(e) => onEditParamChange('buy_qty', parseInt(e.target.value) || 1)}
+                    className="input-field py-1 text-xs" />
+                </div>
+                <div>
+                  <label className="text-gray-500 block mb-0.5">Gratis (qty)</label>
+                  <input type="number" min="1" max="5"
+                    value={editParams.free_qty ?? 1}
+                    onChange={(e) => onEditParamChange('free_qty', parseInt(e.target.value) || 1)}
+                    className="input-field py-1 text-xs" />
+                </div>
+              </div>
+            )}
+            {rec.promo_type === 'flash_sale' && (
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <label className="text-gray-500 block mb-0.5">Diskon Flash (%)</label>
+                  <input type="number" min="1" max="50" step="0.1"
+                    value={editParams.flash_discount_pct ?? 10}
+                    onChange={(e) => onEditParamChange('flash_discount_pct', parseFloat(e.target.value) || 0)}
+                    className="input-field py-1 text-xs" />
+                </div>
+                <div>
+                  <label className="text-gray-500 block mb-0.5">Kuota/Hari</label>
+                  <input type="number" min="1"
+                    value={editParams.kuota_per_hari ?? 10}
+                    onChange={(e) => onEditParamChange('kuota_per_hari', parseInt(e.target.value) || 1)}
+                    className="input-field py-1 text-xs" />
+                </div>
+              </div>
+            )}
+            {rec.promo_type === 'min_purchase' && (
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <label className="text-gray-500 block mb-0.5">Min Belanja (Rp)</label>
+                  <input type="number" min="0" step="1000"
+                    value={editParams.min_purchase ?? 0}
+                    onChange={(e) => onEditParamChange('min_purchase', parseFloat(e.target.value) || 0)}
+                    className="input-field py-1 text-xs" />
+                </div>
+                <div>
+                  <label className="text-gray-500 block mb-0.5">Diskon Nominal (Rp)</label>
+                  <input type="number" min="0" step="1000"
+                    value={editParams.discount_nom ?? 0}
+                    onChange={(e) => onEditParamChange('discount_nom', parseFloat(e.target.value) || 0)}
+                    className="input-field py-1 text-xs" />
+                </div>
+              </div>
+            )}
+            {marginPct < 0 && (
+              <div className="flex items-center gap-2 bg-red-50 text-red-700 px-3 py-2 rounded-lg text-xs">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Margin negatif — akan merugi!
+              </div>
+            )}
+            <p className="text-xs font-medium text-gray-600">Margin: {marginPct.toFixed(1)}%</p>
+            <MarginBar marginPct={marginPct} />
+            <div className="flex gap-2">
+              <button
+                onClick={() => onSaveCartParams(rec)}
+                disabled={marginPct < 0 || saving}
+                className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 text-white text-xs font-medium rounded-lg transition-colors"
+              >
+                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                Simpan Parameter
+              </button>
+              <button onClick={onCancelEdit} className="px-3 py-2 border border-gray-300 text-gray-600 text-xs rounded-lg hover:bg-gray-50">
+                Batal
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {hasSavedParams ? (
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs bg-indigo-50 rounded-lg p-2">
+                {Object.entries(rec.params).map(([k, v]) => {
+                  if (k === 'nama_promo') return null;
+                  return (
+                    <div key={k} className="flex justify-between">
+                      <span className="text-gray-500 capitalize">{k.replace(/_/g, ' ')}</span>
+                      <span className="font-medium text-gray-700">
+                        {typeof v === 'number' && k.includes('price') ? formatRupiah(v) : String(v)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-400 italic">Belum ada parameter — klik Ubah untuk set harga promo</p>
+            )}
+            <p className="text-xs font-medium text-gray-600">Margin: {marginPct.toFixed(1)}%</p>
+            <MarginBar marginPct={marginPct} />
+          </div>
+        )}
+      </div>
+
+      {/* Action */}
+      {!isEditing && (
+        <div className="border-t border-gray-100 pt-2">
+          <button
+            onClick={() => onApprove(rec)}
+            disabled={marginPct < 0}
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg transition-colors"
+            title={marginPct < 0 ? 'Margin negatif, tidak bisa disetujui' : 'Setujui dan buat promo'}
+          >
+            <CheckCircle className="w-3.5 h-3.5" />
+            Setujui
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -612,7 +883,7 @@ export default function RekomendasiPromoPage() {
   const [history, setHistory] = useState<PromoRecommendation[]>([]);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
-  const [activeTab, setActiveTab] = useState<'pending' | 'history'>('pending');
+  const [activeTab, setActiveTab] = useState<'pending' | 'history' | 'cart'>('pending');
   const [filterPriority, setFilterPriority] = useState<'' | Priority>('');
   const [filterType, setFilterType] = useState<'' | PromoType>('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -650,10 +921,53 @@ export default function RekomendasiPromoPage() {
   const manualAnimFrameRef = useRef<number | null>(null);
   const [cleaningDuplicates, setCleaningDuplicates] = useState(false);
   const [activePromoWarning, setActivePromoWarning] = useState<{ rec: PromoRecommendation; promoName: string } | null>(null);
+  const [savingCartParams, setSavingCartParams] = useState(false);
+  const [approvingAllCart, setApprovingAllCart] = useState(false);
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
+  };
+
+  // ── Keranjang Promo ───────────────────────────────────────────────────────
+  const handleToggleCart = async (rec: PromoRecommendation) => {
+    const newVal = !rec.in_cart;
+    await supabase.from('promo_recommendations').update({ in_cart: newVal }).eq('id', rec.id);
+    setRecs((prev) => prev.map((r) => r.id === rec.id ? { ...r, in_cart: newVal } : r));
+    showToast(newVal ? `"${rec.product_name}" ditambahkan ke keranjang` : `"${rec.product_name}" dikeluarkan dari keranjang`);
+  };
+
+  const handleSaveCartParams = async (rec: PromoRecommendation) => {
+    setSavingCartParams(true);
+    try {
+      await supabase.from('promo_recommendations').update({ params: { ...rec.params, ...editParams } }).eq('id', rec.id);
+      setRecs((prev) => prev.map((r) => r.id === rec.id ? { ...r, params: { ...rec.params, ...editParams } } : r));
+      setEditingId(null);
+      setEditParams({});
+      showToast('Parameter berhasil disimpan');
+    } catch (err) {
+      showToast('Gagal menyimpan: ' + (err instanceof Error ? err.message : 'Unknown'), 'error');
+    } finally {
+      setSavingCartParams(false);
+    }
+  };
+
+  const handleApproveAllCart = async () => {
+    const cartItems = recs.filter((r) => r.in_cart);
+    if (cartItems.length === 0) return;
+    setApprovingAllCart(true);
+    let success = 0;
+    let failed = 0;
+    for (const rec of cartItems) {
+      try {
+        await handleApprove(rec);
+        success++;
+      } catch {
+        failed++;
+      }
+    }
+    setApprovingAllCart(false);
+    showToast(`${success} promo berhasil disetujui${failed > 0 ? `, ${failed} gagal` : ''}`);
   };
 
   // ── Scanner kamera untuk tambah manual ───────────────────────────────────
@@ -1304,6 +1618,8 @@ export default function RekomendasiPromoPage() {
 
   const urgentCount = recs.filter((r) => r.priority === 'urgent').length;
   const latestAnalyzedAt = recs.length > 0 ? recs[0].analyzed_at : null;
+  const cartRecs = recs.filter((r) => r.in_cart);
+  const cartCount = cartRecs.length;
 
   // Deteksi duplikat di state recs
   const seenProductIds = new Set<string>();
@@ -1393,6 +1709,18 @@ export default function RekomendasiPromoPage() {
           {recs.length > 0 && (
             <span className={`ml-1.5 inline-flex items-center justify-center w-5 h-5 rounded-full text-xs ${urgentCount > 0 ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'}`}>
               {recs.length}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab('cart')}
+          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'cart' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+        >
+          <ShoppingCart className="w-4 h-4" />
+          Keranjang
+          {cartCount > 0 && (
+            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full text-xs bg-indigo-100 text-indigo-700">
+              {cartCount}
             </span>
           )}
         </button>
@@ -1493,6 +1821,7 @@ export default function RekomendasiPromoPage() {
                       onEditParamChange={handleEditParamChange}
                       onOpenPromoForm={handleOpenPromoForm}
                       onMakePoster={handleMakePoster}
+                      onToggleCart={handleToggleCart}
                     />
                   ))}
                 </div>
@@ -1570,6 +1899,58 @@ export default function RekomendasiPromoPage() {
                     </tbody>
                   </table>
                 </div>
+              )}
+            </div>
+          )}
+
+          {/* ── TAB: KERANJANG ─────────────────────────────────────────────── */}
+          {activeTab === 'cart' && (
+            <div className="space-y-4">
+              {cartRecs.length === 0 ? (
+                <div className="text-center py-16 card space-y-2">
+                  <ShoppingCart className="w-12 h-12 text-gray-200 mx-auto" />
+                  <p className="text-gray-500 font-medium text-sm">Keranjang kosong</p>
+                  <p className="text-gray-400 text-xs">Pilih rekomendasi di tab Rekomendasi, klik tombol &quot;Keranjang&quot; untuk menambahkan.</p>
+                </div>
+              ) : (
+                <>
+                  {/* Header keranjang */}
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-gray-600 font-medium">
+                      {cartCount} produk siap dipromo
+                    </p>
+                    <button
+                      onClick={handleApproveAllCart}
+                      disabled={approvingAllCart || cartRecs.every(r => {
+                        const mp = Number(r.params.margin_promo_pct ?? r.params.margin_bundle_pct ?? r.params.margin_flash_pct ?? r.params.margin_efektif_pct ?? 0);
+                        return mp < 0;
+                      })}
+                      className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white text-sm font-semibold rounded-lg transition-colors"
+                    >
+                      {approvingAllCart ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                      {approvingAllCart ? 'Menyetujui...' : `Setujui Semua (${cartCount})`}
+                    </button>
+                  </div>
+
+                  {/* Grid cart cards */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {cartRecs.map((rec) => (
+                      <CartCard
+                        key={rec.id}
+                        rec={rec}
+                        editingId={editingId}
+                        editParams={editParams}
+                        onStartEdit={handleStartEdit}
+                        onCancelEdit={handleCancelEdit}
+                        onEditParamChange={handleEditParamChange}
+                        onSaveCartParams={handleSaveCartParams}
+                        onApprove={(rec) => checkAndConfirmApprove(rec)}
+                        onRemoveFromCart={handleToggleCart}
+                        saving={savingCartParams}
+                      />
+                    ))}
+                  </div>
+                </>
               )}
             </div>
           )}
