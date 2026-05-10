@@ -367,6 +367,28 @@ def _action_quit(icon: pystray.Icon, item):
 # MAIN
 # ═══════════════════════════════════════════════════════════════
 
+def _check_autostart() -> bool:
+    """Cek apakah autostart sudah terdaftar di Windows registry. Log hasilnya."""
+    import winreg
+    reg_key  = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+    reg_name = "iPOS_SyncAgent_Saharamart"
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_key, 0, winreg.KEY_READ)
+        val, _ = winreg.QueryValueEx(key, reg_name)
+        winreg.CloseKey(key)
+        logging.info(f"[AUTOSTART] TERDAFTAR — registry key '{reg_name}' aktif: {val}")
+        return True
+    except FileNotFoundError:
+        logging.warning(
+            f"[AUTOSTART] BELUM TERDAFTAR — registry key '{reg_name}' tidak ditemukan. "
+            "Jalankan 3_AUTOSTART.bat agar sync otomatis aktif saat PC menyala."
+        )
+        return False
+    except Exception as e:
+        logging.warning(f"[AUTOSTART] Gagal cek registry: {e}")
+        return False
+
+
 def main():
     # Setup logging (gabung dengan sync_agent.py handler)
     logging.basicConfig(
@@ -376,6 +398,13 @@ def main():
             logging.FileHandler(str(LOG_FILE), encoding="utf-8"),
         ],
     )
+
+    logging.info("=" * 60)
+    logging.info(f"Sync Agent SAHARAMART (SM01) dimulai — {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+    logging.info("=" * 60)
+
+    # Cek status autostart registry
+    autostart_ok = _check_autostart()
 
     # Cek .env
     if not ENV_FILE.exists():
@@ -407,10 +436,12 @@ def main():
     threading.Thread(target=_monitor_loop, args=(icon,), daemon=True).start()
 
     # Notifikasi startup
+    autostart_info = "Auto-start: AKTIF saat PC menyala." if autostart_ok \
+                     else "PERINGATAN: Auto-start belum aktif! Jalankan 3_AUTOSTART.bat."
     notify(
-        "Sync Agent iPOS — Aktif",
-        "Sync berjalan di background setiap 15 menit.\n"
-        "Icon di pojok kanan bawah Windows (system tray).",
+        "Sync Agent SAHARAMART — Aktif",
+        f"Sync berjalan di background setiap 2 menit.\n{autostart_info}",
+        is_error=not autostart_ok,
     )
 
     # Jalankan tray icon (blocking — program berjalan selama ini aktif)

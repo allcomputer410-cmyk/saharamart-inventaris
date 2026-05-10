@@ -25,6 +25,7 @@ import {
   Palette,
   Plus,
   X,
+  Camera,
 } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -351,9 +352,26 @@ function RecommendationCard({
                     </div>
                     <div>
                       <label className="text-gray-500 block mb-0.5">Harga Promo</label>
-                      <p className="font-semibold text-gray-700 pt-1">
-                        {formatRupiah(rec.sell_price * (1 - (editParams.discount_pct ?? 0) / 100))}
-                      </p>
+                      <div className="flex items-center gap-1.5 pt-1">
+                        <p className="font-semibold text-gray-700">
+                          {formatRupiah(rec.sell_price * (1 - (editParams.discount_pct ?? 0) / 100))}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const promoPrice = rec.sell_price * (1 - (editParams.discount_pct ?? 0) / 100);
+                            const rounded = Math.floor(promoPrice / 500) * 500;
+                            if (rounded > 0 && rounded !== promoPrice) {
+                              const newDisc = (1 - rounded / rec.sell_price) * 100;
+                              onEditParamChange('discount_pct', parseFloat(newDisc.toFixed(2)));
+                            }
+                          }}
+                          className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 hover:bg-blue-200 rounded font-medium transition-colors flex-shrink-0"
+                          title="Bulatkan harga promo ke kelipatan 500 terdekat ke bawah"
+                        >
+                          ↓500
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -622,6 +640,14 @@ export default function RekomendasiPromoPage() {
   const [manualSaving, setManualSaving] = useState(false);
   const manualSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [manualDuplicateWarning, setManualDuplicateWarning] = useState<string | null>(null);
+
+  // Scanner kamera untuk modal tambah manual
+  const [manualScanMode, setManualScanMode] = useState(false);
+  const [manualScanStatus, setManualScanStatus] = useState('');
+  const [manualScanError, setManualScanError] = useState('');
+  const manualVideoRef = useRef<HTMLVideoElement>(null);
+  const manualStreamRef = useRef<MediaStream | null>(null);
+  const manualAnimFrameRef = useRef<number | null>(null);
   const [cleaningDuplicates, setCleaningDuplicates] = useState(false);
   const [activePromoWarning, setActivePromoWarning] = useState<{ rec: PromoRecommendation; promoName: string } | null>(null);
 
@@ -629,6 +655,104 @@ export default function RekomendasiPromoPage() {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
   };
+
+  // ── Scanner kamera untuk tambah manual ───────────────────────────────────
+  useEffect(() => {
+    if (!manualScanMode) return;
+    let stopped = false;
+
+    async function initScanner() {
+      try {
+        setManualScanError('');
+        setManualScanStatus('Meminta izin kamera...');
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+        manualStreamRef.current = stream;
+        if (stopped) { stream.getTracks().forEach(t => t.stop()); return; }
+
+        const video = manualVideoRef.current;
+        if (!video) return;
+        video.srcObject = stream;
+        setManualScanStatus('Menunggu kamera siap...');
+
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Timeout')), 8000);
+          const done = () => { clearTimeout(timeout); resolve(); };
+          if (video.readyState >= 3) { done(); return; }
+          video.addEventListener('playing', done, { once: true });
+          video.play().catch(reject);
+        });
+
+        if (stopped) return;
+
+        const { HTMLCanvasElementLuminanceSource } = await import('@zxing/browser');
+        const { BinaryBitmap, HybridBinarizer, DecodeHintType, BarcodeFormat, MultiFormatReader } = await import('@zxing/library');
+
+        const hints = new Map();
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+          BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A,
+          BarcodeFormat.UPC_E, BarcodeFormat.CODE_128, BarcodeFormat.CODE_39, BarcodeFormat.QR_CODE,
+        ]);
+        hints.set(DecodeHintType.TRY_HARDER, true);
+
+        const reader = new MultiFormatReader();
+        reader.setHints(hints);
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+
+        setManualScanStatus('Kamera aktif · Arahkan barcode ke kotak biru...');
+
+        let lastValue = '';
+        let lastTime = 0;
+
+        const scanLoop = () => {
+          if (stopped) return;
+          try {
+            if (video.readyState >= 2 && video.videoWidth > 0) {
+              const vw = video.videoWidth, vh = video.videoHeight;
+              const cropW = Math.floor(vw * 0.75), cropH = Math.floor(vh * 0.35);
+              canvas.width = cropW; canvas.height = cropH;
+              ctx.drawImage(video, Math.floor((vw - cropW) / 2), Math.floor((vh - cropH) / 2), cropW, cropH, 0, 0, cropW, cropH);
+              try {
+                const result = reader.decode(new BinaryBitmap(new HybridBinarizer(new HTMLCanvasElementLuminanceSource(canvas))));
+                const value = result.getText();
+                const now = Date.now();
+                if (value !== lastValue || now - lastTime > 2000) {
+                  lastValue = value; lastTime = now;
+                  setManualSearch(value);
+                  if (manualSearchTimer.current) clearTimeout(manualSearchTimer.current);
+                  manualSearchTimer.current = setTimeout(() => searchManualProducts(value), 300);
+                  setManualFocused(true);
+                  setManualScanMode(false);
+                }
+              } catch { /* no barcode in frame */ }
+            }
+          } catch { /* frame error */ }
+          manualAnimFrameRef.current = requestAnimationFrame(scanLoop);
+        };
+        manualAnimFrameRef.current = requestAnimationFrame(scanLoop);
+      } catch (err) {
+        if (!stopped) {
+          console.error('[Scanner]', err);
+          setManualScanStatus('');
+          setManualScanError('Tidak bisa mengakses kamera. Gunakan pencarian teks.');
+        }
+      }
+    }
+
+    initScanner();
+    const videoEl = manualVideoRef.current;
+    return () => {
+      stopped = true;
+      if (manualAnimFrameRef.current) { cancelAnimationFrame(manualAnimFrameRef.current); manualAnimFrameRef.current = null; }
+      manualStreamRef.current?.getTracks().forEach(t => t.stop());
+      manualStreamRef.current = null;
+      if (videoEl) videoEl.srcObject = null;
+      setManualScanStatus('');
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manualScanMode]);
 
   const fetchRecs = useCallback(async () => {
     setLoading(true);
@@ -1548,7 +1672,7 @@ export default function RekomendasiPromoPage() {
                 <Plus className="w-4 h-4 text-purple-600" />
                 Tambah Produk Manual ke Analisis
               </h3>
-              <button onClick={() => setShowManualAdd(false)} className="p-1 hover:bg-gray-100 rounded-lg">
+              <button onClick={() => { setShowManualAdd(false); setManualScanMode(false); }} className="p-1 hover:bg-gray-100 rounded-lg">
                 <X className="w-5 h-5 text-gray-500" />
               </button>
             </div>
@@ -1572,17 +1696,29 @@ export default function RekomendasiPromoPage() {
                     </button>
                   </div>
                 ) : (
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                    <input
-                      type="text"
-                      value={manualSearch}
-                      onChange={(e) => handleManualSearchChange(e.target.value)}
-                      onFocus={() => { setManualFocused(true); searchManualProducts(manualSearch); }}
-                      onBlur={() => setTimeout(() => setManualFocused(false), 150)}
-                      placeholder="Ketik nama atau barcode produk..."
-                      className="input-field pl-9 text-sm"
-                    />
+                  <div className="space-y-2">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input
+                        type="text"
+                        value={manualSearch}
+                        onChange={(e) => handleManualSearchChange(e.target.value)}
+                        onFocus={() => { setManualFocused(true); searchManualProducts(manualSearch); }}
+                        onBlur={() => setTimeout(() => setManualFocused(false), 150)}
+                        placeholder="Ketik nama atau barcode produk..."
+                        className="input-field pl-9 pr-10 text-sm"
+                      />
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => setManualScanMode((v) => !v)}
+                        className={`absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-lg transition-colors ${
+                          manualScanMode ? 'bg-blue-100 text-blue-600' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                        }`}
+                        title="Scan barcode dengan kamera"
+                      >
+                        <Camera className="w-4 h-4" />
+                      </button>
                     {manualFocused && (
                       <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg z-10 max-h-56 overflow-y-auto">
                         {manualSearchLoading ? (
@@ -1621,6 +1757,25 @@ export default function RekomendasiPromoPage() {
                               </button>
                             );
                           })
+                        )}
+                      </div>
+                    )}
+                    </div>
+                    {/* Camera view */}
+                    {manualScanMode && (
+                      <div className="rounded-xl overflow-hidden border border-blue-200">
+                        {manualScanError ? (
+                          <div className="p-3 text-red-600 text-xs text-center bg-red-50 rounded-xl">{manualScanError}</div>
+                        ) : (
+                          <div className="relative bg-black rounded-t-xl overflow-hidden">
+                            <video ref={manualVideoRef} autoPlay playsInline muted className="w-full" style={{ maxHeight: '200px', objectFit: 'cover' }} />
+                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                              <div className="border-2 border-blue-400 rounded" style={{ width: '75%', height: '35%' }} />
+                            </div>
+                          </div>
+                        )}
+                        {manualScanStatus && (
+                          <p className="text-xs text-center text-blue-600 py-1.5 font-medium bg-white">{manualScanStatus}</p>
                         )}
                       </div>
                     )}
@@ -1688,7 +1843,7 @@ export default function RekomendasiPromoPage() {
 
             <div className="flex gap-3 px-6 py-4 border-t border-gray-200">
               <button
-                onClick={() => setShowManualAdd(false)}
+                onClick={() => { setShowManualAdd(false); setManualScanMode(false); }}
                 className="flex-1 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors"
               >
                 Batal

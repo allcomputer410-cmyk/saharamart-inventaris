@@ -22,6 +22,7 @@ import {
   ChevronUp,
   RefreshCw,
   RotateCcw,
+  Camera,
 } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -219,6 +220,14 @@ export default function PromoPage() {
   const [formProductFocused, setFormProductFocused] = useState(false);
   const productSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Scanner kamera untuk form buat promo
+  const [formScanMode, setFormScanMode] = useState(false);
+  const [formScanStatus, setFormScanStatus] = useState('');
+  const [formScanError, setFormScanError] = useState('');
+  const formVideoRef = useRef<HTMLVideoElement>(null);
+  const formStreamRef = useRef<MediaStream | null>(null);
+  const formAnimFrameRef = useRef<number | null>(null);
+
   // ─── Fetch ──────────────────────────────────────────────────────────────────
 
   const fetchPromos = useCallback(async () => {
@@ -265,6 +274,104 @@ export default function PromoPage() {
     if (productSearchTimer.current) clearTimeout(productSearchTimer.current);
     productSearchTimer.current = setTimeout(() => searchProducts(val), 300);
   };
+
+  // ── Scanner kamera untuk form buat promo ─────────────────────────────────
+  useEffect(() => {
+    if (!formScanMode) return;
+    let stopped = false;
+
+    async function initScanner() {
+      try {
+        setFormScanError('');
+        setFormScanStatus('Meminta izin kamera...');
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+        formStreamRef.current = stream;
+        if (stopped) { stream.getTracks().forEach(t => t.stop()); return; }
+
+        const video = formVideoRef.current;
+        if (!video) return;
+        video.srcObject = stream;
+        setFormScanStatus('Menunggu kamera siap...');
+
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Timeout')), 8000);
+          const done = () => { clearTimeout(timeout); resolve(); };
+          if (video.readyState >= 3) { done(); return; }
+          video.addEventListener('playing', done, { once: true });
+          video.play().catch(reject);
+        });
+
+        if (stopped) return;
+
+        const { HTMLCanvasElementLuminanceSource } = await import('@zxing/browser');
+        const { BinaryBitmap, HybridBinarizer, DecodeHintType, BarcodeFormat, MultiFormatReader } = await import('@zxing/library');
+
+        const hints = new Map();
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+          BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A,
+          BarcodeFormat.UPC_E, BarcodeFormat.CODE_128, BarcodeFormat.CODE_39, BarcodeFormat.QR_CODE,
+        ]);
+        hints.set(DecodeHintType.TRY_HARDER, true);
+
+        const reader = new MultiFormatReader();
+        reader.setHints(hints);
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+
+        setFormScanStatus('Kamera aktif · Arahkan barcode ke kotak biru...');
+
+        let lastValue = '';
+        let lastTime = 0;
+
+        const scanLoop = () => {
+          if (stopped) return;
+          try {
+            if (video.readyState >= 2 && video.videoWidth > 0) {
+              const vw = video.videoWidth, vh = video.videoHeight;
+              const cropW = Math.floor(vw * 0.75), cropH = Math.floor(vh * 0.35);
+              canvas.width = cropW; canvas.height = cropH;
+              ctx.drawImage(video, Math.floor((vw - cropW) / 2), Math.floor((vh - cropH) / 2), cropW, cropH, 0, 0, cropW, cropH);
+              try {
+                const result = reader.decode(new BinaryBitmap(new HybridBinarizer(new HTMLCanvasElementLuminanceSource(canvas))));
+                const value = result.getText();
+                const now = Date.now();
+                if (value !== lastValue || now - lastTime > 2000) {
+                  lastValue = value; lastTime = now;
+                  setFormProductSearch(value);
+                  if (productSearchTimer.current) clearTimeout(productSearchTimer.current);
+                  productSearchTimer.current = setTimeout(() => searchProducts(value), 300);
+                  setFormProductFocused(true);
+                  setFormScanMode(false);
+                }
+              } catch { /* no barcode in frame */ }
+            }
+          } catch { /* frame error */ }
+          formAnimFrameRef.current = requestAnimationFrame(scanLoop);
+        };
+        formAnimFrameRef.current = requestAnimationFrame(scanLoop);
+      } catch (err) {
+        if (!stopped) {
+          console.error('[Scanner]', err);
+          setFormScanStatus('');
+          setFormScanError('Tidak bisa mengakses kamera. Gunakan pencarian teks.');
+        }
+      }
+    }
+
+    initScanner();
+    const videoEl = formVideoRef.current;
+    return () => {
+      stopped = true;
+      if (formAnimFrameRef.current) { cancelAnimationFrame(formAnimFrameRef.current); formAnimFrameRef.current = null; }
+      formStreamRef.current?.getTracks().forEach(t => t.stop());
+      formStreamRef.current = null;
+      if (videoEl) videoEl.srcObject = null;
+      setFormScanStatus('');
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formScanMode]);
 
   const fetchDiscounts = useCallback(async () => {
     setDiscountLoading(true);
@@ -859,7 +966,7 @@ export default function PromoPage() {
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
               <h2 className="text-lg font-bold text-gray-800">{editPromo ? 'Edit Promo' : 'Buat Promo Baru'}</h2>
-              <button onClick={() => { setShowModal(false); resetForm(); }} className="p-1 hover:bg-gray-100 rounded-lg">
+              <button onClick={() => { setShowModal(false); resetForm(); setFormScanMode(false); }} className="p-1 hover:bg-gray-100 rounded-lg">
                 <X className="w-5 h-5 text-gray-500" />
               </button>
             </div>
@@ -1026,34 +1133,65 @@ export default function PromoPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
                   <Package className="w-4 h-4" /> Produk
                 </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={formProductSearch}
-                    onChange={(e) => handleProductSearchChange(e.target.value)}
-                    onFocus={() => { setFormProductFocused(true); searchProducts(formProductSearch); }}
-                    onBlur={() => setTimeout(() => setFormProductFocused(false), 150)}
-                    placeholder="Ketik nama atau barcode produk..."
-                    className="input-field text-sm"
-                  />
-                  {formProductFocused && (
-                    <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg z-10 max-h-56 overflow-y-auto">
-                      {productSearchLoading ? (
-                        <div className="flex items-center gap-2 px-3 py-3 text-sm text-gray-400">
-                          <Loader2 className="w-4 h-4 animate-spin" /> Mencari...
-                        </div>
-                      ) : filteredProductSearch.length === 0 ? (
-                        <p className="px-3 py-3 text-sm text-gray-400">
-                          {formProductSearch ? 'Produk tidak ditemukan.' : 'Ketik untuk mencari produk...'}
-                        </p>
+                <div className="space-y-2">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={formProductSearch}
+                      onChange={(e) => handleProductSearchChange(e.target.value)}
+                      onFocus={() => { setFormProductFocused(true); searchProducts(formProductSearch); }}
+                      onBlur={() => setTimeout(() => setFormProductFocused(false), 150)}
+                      placeholder="Ketik nama atau barcode produk..."
+                      className="input-field text-sm pr-10"
+                    />
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setFormScanMode((v) => !v)}
+                      className={`absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-lg transition-colors ${
+                        formScanMode ? 'bg-blue-100 text-blue-600' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                      }`}
+                      title="Scan barcode dengan kamera"
+                    >
+                      <Camera className="w-4 h-4" />
+                    </button>
+                    {formProductFocused && (
+                      <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg z-10 max-h-56 overflow-y-auto">
+                        {productSearchLoading ? (
+                          <div className="flex items-center gap-2 px-3 py-3 text-sm text-gray-400">
+                            <Loader2 className="w-4 h-4 animate-spin" /> Mencari...
+                          </div>
+                        ) : filteredProductSearch.length === 0 ? (
+                          <p className="px-3 py-3 text-sm text-gray-400">
+                            {formProductSearch ? 'Produk tidak ditemukan.' : 'Ketik untuk mencari produk...'}
+                          </p>
+                        ) : (
+                          filteredProductSearch.map((p) => (
+                            <button key={p.id} type="button" onClick={() => addProductToForm(p)}
+                              className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm border-b border-gray-50 last:border-0">
+                              <p className="font-medium text-gray-800">{p.name}</p>
+                              <p className="text-xs text-gray-400">{p.barcode} · HPP: {formatRupiah(p.hpp)}</p>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {/* Camera view */}
+                  {formScanMode && (
+                    <div className="rounded-xl overflow-hidden border border-blue-200">
+                      {formScanError ? (
+                        <div className="p-3 text-red-600 text-xs text-center bg-red-50 rounded-xl">{formScanError}</div>
                       ) : (
-                        filteredProductSearch.map((p) => (
-                          <button key={p.id} type="button" onClick={() => addProductToForm(p)}
-                            className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm border-b border-gray-50 last:border-0">
-                            <p className="font-medium text-gray-800">{p.name}</p>
-                            <p className="text-xs text-gray-400">{p.barcode} · HPP: {formatRupiah(p.hpp)}</p>
-                          </button>
-                        ))
+                        <div className="relative bg-black rounded-t-xl overflow-hidden">
+                          <video ref={formVideoRef} autoPlay playsInline muted className="w-full" style={{ maxHeight: '200px', objectFit: 'cover' }} />
+                          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <div className="border-2 border-blue-400 rounded" style={{ width: '75%', height: '35%' }} />
+                          </div>
+                        </div>
+                      )}
+                      {formScanStatus && (
+                        <p className="text-xs text-center text-blue-600 py-1.5 font-medium bg-white">{formScanStatus}</p>
                       )}
                     </div>
                   )}
@@ -1139,7 +1277,7 @@ export default function PromoPage() {
 
             {/* Modal Footer */}
             <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200">
-              <button onClick={() => { setShowModal(false); resetForm(); }} className="btn-secondary" disabled={saving}>Batal</button>
+              <button onClick={() => { setShowModal(false); resetForm(); setFormScanMode(false); }} className="btn-secondary" disabled={saving}>Batal</button>
               <button onClick={handleSave} disabled={saving || !formName.trim()} className="btn-primary flex items-center gap-2">
                 {saving && <Loader2 className="w-4 h-4 animate-spin" />}
                 {editPromo ? 'Simpan Perubahan' : 'Buat Promo'}

@@ -299,9 +299,6 @@ def sync_products(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str)
                hargapokok, hargajual1, supplier1, stokmin, stok,
                rak, dateupd, statusjual, statushapus
         FROM tbl_item
-        WHERE statushapus IS NULL
-           OR statushapus = ''
-           OR statushapus = 'N'
         ORDER BY kodeitem
     """)
     ipos_items = cur.fetchall()
@@ -353,7 +350,7 @@ def sync_products(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str)
             "sell_price": dec(item.get("hargajual1")),
             "shelf_location": safe_str(item.get("rak")).strip() or None,
             "is_active": safe_str(item.get("statusjual")) != "1",
-            "is_deleted": False,  # sudah difilter di query (statushapus IS NULL/''/N)
+            "is_deleted": safe_str(item.get("statushapus")) not in ("", "N", None, "None"),
             "ipos_kodeitem": kode,
             "ipos_supplier_code": sup_code or None,
             "category_id": cat_map.get(jenis) if jenis else None,
@@ -497,6 +494,7 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
     cur = ipos_conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     # Get daily totals from tbl_ikhd (header penjualan)
+    # tipe = 'KSR' → hanya transaksi kasir normal, exclude IK/RETUR/TRANSFER
     cur.execute("""
         SELECT DATE(tanggal) as sale_date,
                COUNT(*) as total_transactions,
@@ -504,6 +502,7 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
         FROM tbl_ikhd
         WHERE DATE(tanggal) >= %s
           AND kodekantor = %s
+          AND tipe = 'KSR'
         GROUP BY DATE(tanggal)
         ORDER BY sale_date
     """, (since_date, kodekantor))
@@ -518,6 +517,7 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
     products = sb.select_all("store_products", {
         "store_id": f"eq.{store_id}",
         "select": "id,ipos_kodeitem,barcode,hpp",
+        "order": "id",
     })
     prod_map: dict = {}
     prod_map_upper: dict = {}
@@ -553,7 +553,7 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
     for daily in daily_totals:
         sale_date = str(daily["sale_date"])
 
-        # Get item-level detail for this day
+        # Get item-level detail for this day (hanya KSR)
         cur.execute("""
             SELECT d.kodeitem,
                    SUM(d.jumlah) as qty_sold,
@@ -563,6 +563,7 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
             JOIN tbl_ikhd h ON h.notransaksi = d.notransaksi
             WHERE DATE(h.tanggal) = %s
               AND h.kodekantor = %s
+              AND h.tipe = 'KSR'
             GROUP BY d.kodeitem
         """, (sale_date, kodekantor))
         items = cur.fetchall()
@@ -1115,13 +1116,34 @@ def run_sync(sync_type: str = "full", store_code: str = None):
     """Run sync for all active stores (or one specific store if store_code given)."""
     # File lock — cegah double sync jika proses sebelumnya masih berjalan
     if os.path.exists(LOCK_FILE):
+        stale = False
         try:
             with open(LOCK_FILE) as lf:
-                pid = lf.read().strip()
-            log.warning(f"Sync sudah berjalan (PID {pid}), skip.")
+                pid = int(lf.read().strip())
+            # Cek apakah PID masih hidup
+            try:
+                os.kill(pid, 0)  # signal 0 = cek eksistensi saja
+                # PID masih hidup, cek umur lock file
+                lock_age = time.time() - os.path.getmtime(LOCK_FILE)
+                if lock_age > 1800:  # 30 menit = stuck
+                    log.warning(f"Lock file sudah {int(lock_age/60)} menit (PID {pid}), dianggap stuck — hapus lock.")
+                    stale = True
+                else:
+                    log.warning(f"Sync sudah berjalan (PID {pid}, {int(lock_age/60)} menit), skip.")
+                    return
+            except (OSError, ProcessLookupError):
+                # PID tidak ada = proses sudah mati tapi lock tidak terhapus
+                log.warning(f"Stale lock file ditemukan (PID {pid} sudah tidak ada) — hapus lock.")
+                stale = True
         except Exception:
-            log.warning("Sync sudah berjalan (lock file ada), skip.")
-        return
+            log.warning("Lock file tidak bisa dibaca — hapus lock.")
+            stale = True
+
+        if stale:
+            try:
+                os.remove(LOCK_FILE)
+            except Exception:
+                pass
 
     try:
         with open(LOCK_FILE, "w") as lf:
