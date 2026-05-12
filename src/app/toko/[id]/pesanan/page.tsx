@@ -7,6 +7,7 @@ import {
   ShoppingCart, Search, CheckCircle2, Loader2, ChevronDown, ChevronUp,
   Plus, Trash2, Send, AlertTriangle, PackageSearch, X, MonitorSmartphone,
   ClipboardList, Package, MessageCircle, Mail, Download, Bell, RotateCcw, Camera,
+  History, Undo2, List, LayoutList,
 } from 'lucide-react';
 import { formatRupiah, formatDateShort, generateDoNumber } from '@/lib/utils';
 import type { Order } from '@/types/database';
@@ -14,7 +15,7 @@ import type { RekapPDFProps } from '@/components/ui/RekapPDF';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type TabType = 'buat' | 'rekap' | 'terima' | 'kosong';
+type TabType = 'buat' | 'rekap' | 'terima' | 'kosong' | 'riwayat';
 
 const STATUS_LABELS: Record<string, { label: string; class: string }> = {
   pending:   { label: 'Menunggu',          class: 'badge-info' },
@@ -24,6 +25,7 @@ const STATUS_LABELS: Record<string, { label: string; class: string }> = {
   complete:  { label: 'Selesai',           class: 'badge-success' },
   received:  { label: 'Diterima',          class: 'badge-success' },
   cancelled: { label: 'Semua Kosong',        class: 'badge-danger' },
+  deleted:   { label: 'Dihapus',             class: 'badge-danger' },
 };
 
 interface PendingItem {
@@ -86,6 +88,27 @@ interface KosongGroup {
   supplierName: string;
   supplierPhone?: string;
   items: KosongItem[];
+}
+
+interface PenerimaanSupplierItem {
+  orderId: string;
+  doNumber: string;
+  itemId: string;
+  store_product_id: string;
+  productName: string;
+  barcode: string;
+  unit: string;
+  qty_ordered: number;
+  qty_received: number | null;
+  hpp_at_order: number | null;
+  status: string;
+}
+
+interface PenerimaanSupplierGroup {
+  supplierId: string;
+  supplierName: string;
+  supplierPhone?: string;
+  items: PenerimaanSupplierItem[];
 }
 
 // ── Sound helpers ─────────────────────────────────────────────────────────────
@@ -160,6 +183,16 @@ function PesananContent() {
   const [deleteConfirmOrderId, setDeleteConfirmOrderId] = useState<string | null>(null);
   const [kosongGroups, setKosongGroups] = useState<KosongGroup[]>([]);
   const [kosongLoading, setKosongLoading] = useState(false);
+
+  // ── Penerimaan view toggle ─────────────────────────────────────────────────
+  const [penerimaanView, setPenerimaanView] = useState<'do' | 'supplier'>('do');
+  const [penerimaanSupplierGroups, setPenerimaanSupplierGroups] = useState<PenerimaanSupplierGroup[]>([]);
+  const [penerimaanSupplierLoading, setPenerimaanSupplierLoading] = useState(false);
+  const [expandedSupplierGroup, setExpandedSupplierGroup] = useState<string | null>(null);
+
+  // ── Riwayat Hapus tab ─────────────────────────────────────────────────────
+  const [deletedOrders, setDeletedOrders] = useState<Order[]>([]);
+  const [deletedLoading, setDeletedLoading] = useState(false);
 
   // Bersihkan interval saat komponen unmount
   useEffect(() => {
@@ -277,7 +310,9 @@ function PesananContent() {
 
     if (filterStatus === 'active') {
       query = query.in('status', ['draft', 'ordered', 'partial']);
-    } else if (filterStatus !== 'all') {
+    } else if (filterStatus === 'all') {
+      query = query.not('status', 'eq', 'deleted');
+    } else {
       query = query.eq('status', filterStatus);
     }
 
@@ -961,6 +996,64 @@ function PesananContent() {
     if (activeTab === 'kosong') fetchKosong();
   }, [activeTab, fetchKosong]);
 
+  // ── Fetch deleted orders (Riwayat Hapus) ─────────────────────────────────
+  const fetchDeletedOrders = useCallback(async () => {
+    setDeletedLoading(true);
+    const { data, error } = await supabase
+      .from('orders')
+      .select(`
+        *,
+        supplier:suppliers(id, code, name, phone),
+        items:order_items(
+          *,
+          store_product:store_products(id, barcode, name, unit, hpp)
+        )
+      `)
+      .eq('store_id', storeId)
+      .eq('status', 'deleted')
+      .order('updated_at', { ascending: false })
+      .limit(50);
+    if (!error) {
+      const normalized = (data || []).map((order) => {
+        const sup = Array.isArray(order.supplier) ? order.supplier[0] : order.supplier;
+        const items = (order.items || []).map((item: Record<string, unknown>) => {
+          const sp = Array.isArray(item.store_product) ? item.store_product[0] : item.store_product;
+          return { ...item, store_product: sp };
+        });
+        return { ...order, supplier: sup, items };
+      });
+      setDeletedOrders(normalized as Order[]);
+    }
+    setDeletedLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId]);
+
+  useEffect(() => {
+    if (activeTab === 'riwayat') fetchDeletedOrders();
+  }, [activeTab, fetchDeletedOrders]);
+
+  const handleRecoverOrder = async (orderId: string) => {
+    setActionLoading(`recover-${orderId}`);
+    await supabase.from('orders')
+      .update({ status: 'draft', updated_at: new Date().toISOString() })
+      .eq('id', orderId);
+    const { data: { user } } = await supabase.auth.getUser();
+    await supabase.from('audit_log').insert({
+      user_id: user?.id || null, store_id: storeId,
+      action: 'recover_order', entity_type: 'order', entity_id: orderId,
+    });
+    setDeletedOrders(prev => prev.filter(o => o.id !== orderId));
+    setActionLoading(null);
+  };
+
+  const handlePermanentDeleteOrder = async (orderId: string) => {
+    setActionLoading(`perm-del-${orderId}`);
+    await supabase.from('order_items').delete().eq('order_id', orderId);
+    await supabase.from('orders').delete().eq('id', orderId);
+    setDeletedOrders(prev => prev.filter(o => o.id !== orderId));
+    setActionLoading(null);
+  };
+
   const handleAddKosongToOrder = (item: KosongItem, supplierName: string) => {
     const alreadyAdded = pendingItems.some(p => p.store_product_id === item.productId);
     if (alreadyAdded) return;
@@ -999,8 +1092,14 @@ function PesananContent() {
 
   const handleDeleteOrder = async (orderId: string) => {
     setActionLoading(`del-order-${orderId}`);
-    await supabase.from('order_items').delete().eq('order_id', orderId);
-    await supabase.from('orders').delete().eq('id', orderId);
+    await supabase.from('orders')
+      .update({ status: 'deleted', updated_at: new Date().toISOString() })
+      .eq('id', orderId);
+    const { data: { user } } = await supabase.auth.getUser();
+    await supabase.from('audit_log').insert({
+      user_id: user?.id || null, store_id: storeId,
+      action: 'delete_order', entity_type: 'order', entity_id: orderId,
+    });
     setOrders(prev => prev.filter(o => o.id !== orderId));
     setDeleteConfirmOrderId(null);
     setActionLoading(null);
@@ -1166,6 +1265,113 @@ function PesananContent() {
     o.supplier?.name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // ── Per Supplier view: lookup supplier dari purchases (sama seperti fetchRekap) ──
+  useEffect(() => {
+    if (penerimaanView !== 'supplier') return;
+
+    const currentFiltered = orders.filter(o =>
+      o.do_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      o.supplier?.name?.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+
+    if (currentFiltered.length === 0) {
+      setPenerimaanSupplierGroups([]);
+      return;
+    }
+
+    (async () => {
+      setPenerimaanSupplierLoading(true);
+
+      // Kumpulkan semua store_product_id dari items
+      const productIds = new Set<string>();
+      currentFiltered.forEach(order => {
+        order.items?.forEach(item => {
+          if (item.store_product_id) productIds.add(item.store_product_id);
+        });
+      });
+
+      // Query supplier dari riwayat pembelian (sama persis seperti fetchRekap)
+      const productSupplierMap: Record<string, string> = {};
+      if (productIds.size > 0) {
+        const { data: purchaseItems } = await supabase
+          .from('purchase_items')
+          .select('store_product_id, purchases!inner(supplier_id)')
+          .in('store_product_id', Array.from(productIds))
+          .order('created_at', { ascending: false })
+          .limit(500);
+
+        (purchaseItems || []).forEach((pi: Record<string, unknown>) => {
+          const productId = pi.store_product_id as string;
+          if (productSupplierMap[productId]) return;
+          const purchase = Array.isArray(pi.purchases) ? pi.purchases[0] : pi.purchases;
+          const pData = purchase as Record<string, unknown> | null;
+          if (pData?.supplier_id) productSupplierMap[productId] = pData.supplier_id as string;
+        });
+      }
+
+      // Kumpulkan semua supplier ID unik
+      const supplierIdSet = new Set<string>();
+      Object.values(productSupplierMap).forEach(sid => supplierIdSet.add(sid));
+      currentFiltered.forEach(o => {
+        const sup = o.supplier as Record<string, string> | undefined;
+        if (sup?.id) supplierIdSet.add(sup.id);
+      });
+
+      // Fetch detail supplier
+      const supplierDetail: Record<string, { name: string; phone?: string }> = {};
+      if (supplierIdSet.size > 0) {
+        const { data: suppliers } = await supabase
+          .from('suppliers')
+          .select('id, name, phone')
+          .in('id', Array.from(supplierIdSet));
+        (suppliers || []).forEach((s: Record<string, string>) => {
+          supplierDetail[s.id] = { name: s.name, phone: s.phone };
+        });
+      }
+
+      // Group per-ITEM per supplier (sama seperti fetchRekap — bukan per order)
+      // Setiap item dilihat supplier-nya dari purchases, satu DO bisa masuk ke banyak grup
+      const groupMap = new Map<string, PenerimaanSupplierGroup>();
+      currentFiltered.forEach(order => {
+        const orderSupFallback = (order.supplier as Record<string, string> | undefined)?.id;
+        order.items?.forEach(item => {
+          // Prioritas: purchase history → order supplier → unknown
+          const sid = productSupplierMap[item.store_product_id]
+            || orderSupFallback
+            || 'unknown';
+
+          const sup = supplierDetail[sid];
+          if (!groupMap.has(sid)) {
+            groupMap.set(sid, {
+              supplierId: sid,
+              supplierName: sup?.name || 'Tanpa Supplier',
+              supplierPhone: sup?.phone,
+              items: [],
+            });
+          }
+          const sp = item.store_product as Record<string, unknown> | null | undefined;
+          groupMap.get(sid)!.items.push({
+            orderId: order.id,
+            doNumber: order.do_number,
+            itemId: item.id,
+            store_product_id: item.store_product_id,
+            productName: (sp?.name as string) || '-',
+            barcode: (sp?.barcode as string) || '-',
+            unit: (sp?.unit as string) || '-',
+            qty_ordered: item.qty_ordered,
+            qty_received: item.qty_received ?? null,
+            hpp_at_order: item.hpp_at_order ?? null,
+            status: item.status,
+          });
+        });
+      });
+
+      setPenerimaanSupplierGroups(Array.from(groupMap.values()));
+      setPenerimaanSupplierLoading(false);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [penerimaanView, orders, searchQuery]);
+
   const STATUS_BADGE: Record<string, string> = {
     kritis:    'bg-red-100 text-red-700',
     rendah:    'bg-yellow-100 text-yellow-700',
@@ -1231,10 +1437,11 @@ function PesananContent() {
       {/* ── Tab navigation ────────────────────────────────────────────────── */}
       <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
         {([
-          { id: 'buat',   label: 'Buat Pesanan',  icon: ShoppingCart },
-          { id: 'rekap',  label: 'Rekap Supplier', icon: ClipboardList },
-          { id: 'terima', label: 'Penerimaan',     icon: Package },
-          { id: 'kosong', label: 'Kosong',         icon: AlertTriangle },
+          { id: 'buat',    label: 'Buat Pesanan',  icon: ShoppingCart },
+          { id: 'rekap',   label: 'Rekap Supplier', icon: ClipboardList },
+          { id: 'terima',  label: 'Penerimaan',     icon: Package },
+          { id: 'kosong',  label: 'Kosong',         icon: AlertTriangle },
+          { id: 'riwayat', label: 'Riwayat Hapus',  icon: History },
         ] as const).map(({ id, label, icon: Icon }) => (
           <button
             key={id}
@@ -1663,20 +1870,43 @@ function PesananContent() {
             </select>
           </div>
 
+          {/* Toggle: Per DO / Per Supplier */}
+          <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg w-fit">
+            <button
+              onClick={() => setPenerimaanView('do')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                penerimaanView === 'do' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <List className="w-4 h-4" />
+              <span className="hidden sm:inline">Per DO</span>
+            </button>
+            <button
+              onClick={() => setPenerimaanView('supplier')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                penerimaanView === 'supplier' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <LayoutList className="w-4 h-4" />
+              <span className="hidden sm:inline">Per Supplier</span>
+            </button>
+          </div>
+
           {/* Daftar pesanan */}
           {loading ? (
             <div className="flex items-center justify-center py-16">
               <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
             </div>
-          ) : filteredOrders.length === 0 ? (
-            <div className="card text-center py-16">
-              <Package className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-              <p className="text-gray-500 font-medium">Belum ada pesanan</p>
-              <p className="text-sm text-gray-400 mt-1">
-                Buat pesanan di tab &quot;Buat Pesanan&quot; terlebih dahulu
-              </p>
-            </div>
-          ) : (
+          ) : penerimaanView === 'do' ? (
+            filteredOrders.length === 0 ? (
+              <div className="card text-center py-16">
+                <Package className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                <p className="text-gray-500 font-medium">Belum ada pesanan</p>
+                <p className="text-sm text-gray-400 mt-1">
+                  Buat pesanan di tab &quot;Buat Pesanan&quot; terlebih dahulu
+                </p>
+              </div>
+            ) : (
             <div className="space-y-3">
               {filteredOrders.map((order) => {
                 const isExpanded = expandedOrder === order.id;
@@ -1890,6 +2120,154 @@ function PesananContent() {
                 );
               })}
             </div>
+            )
+          ) : penerimaanSupplierLoading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+            </div>
+          ) : (
+            penerimaanSupplierGroups.length === 0 ? (
+              <div className="card text-center py-16">
+                <Package className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                <p className="text-gray-500 font-medium">Belum ada pesanan</p>
+                <p className="text-sm text-gray-400 mt-1">
+                  Buat pesanan di tab &quot;Buat Pesanan&quot; terlebih dahulu
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {penerimaanSupplierGroups.map((group) => {
+                  const pendingCount = group.items.filter(i => i.status !== 'received' && i.status !== 'cancelled').length;
+                  return (
+                    <div key={group.supplierId} className="card p-0 overflow-hidden">
+                      {/* Supplier header — klik untuk expand/collapse */}
+                      <button
+                        onClick={() => setExpandedSupplierGroup(
+                          expandedSupplierGroup === group.supplierId ? null : group.supplierId
+                        )}
+                        className="w-full flex items-center justify-between px-4 py-3 bg-blue-50 hover:bg-blue-100 transition-colors text-left"
+                      >
+                        <div>
+                          <p className="font-semibold text-gray-800">{group.supplierName}</p>
+                          <p className="text-xs text-blue-700 mt-0.5">
+                            {group.items.length} item
+                            {pendingCount > 0 && ` · ${pendingCount} belum diterima`}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {group.supplierPhone && (
+                            <a
+                              href={`https://wa.me/${group.supplierPhone.replace(/[^0-9]/g, '').replace(/^0/, '62')}`}
+                              target="_blank" rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
+                            >
+                              <MessageCircle className="w-3.5 h-3.5" />WA
+                            </a>
+                          )}
+                          {expandedSupplierGroup === group.supplierId
+                            ? <ChevronUp className="w-5 h-5 text-blue-400 shrink-0" />
+                            : <ChevronDown className="w-5 h-5 text-blue-400 shrink-0" />}
+                        </div>
+                      </button>
+
+                      {/* Tabel item flat per supplier — hanya tampil saat expanded */}
+                      {expandedSupplierGroup === group.supplierId && (
+                      <div className="overflow-x-auto border-t border-blue-100">
+                        <table className="w-full">
+                          <thead>
+                            <tr className="table-header">
+                              <th className="px-3 py-2">No. Pesanan</th>
+                              <th className="px-3 py-2">Produk</th>
+                              <th className="px-3 py-2">Satuan</th>
+                              <th className="px-3 py-2 text-right">Qty Pesan</th>
+                              <th className="px-3 py-2 text-right">Qty Diterima</th>
+                              <th className="px-3 py-2 text-right">HPP</th>
+                              <th className="px-3 py-2">Status</th>
+                              <th className="px-3 py-2">Aksi</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {group.items.map((item) => {
+                              const itemSt = item.status === 'cancelled'
+                                ? { label: 'Kosong', class: 'badge-danger' }
+                                : (STATUS_LABELS[item.status] || STATUS_LABELS.pending);
+                              return (
+                                <tr key={item.itemId} className="hover:bg-gray-50">
+                                  <td className="table-cell font-mono text-xs text-blue-600">{item.doNumber}</td>
+                                  <td className="table-cell">
+                                    <p className="font-medium text-sm">{item.productName}</p>
+                                    <p className="text-xs text-gray-400 font-mono">{item.barcode}</p>
+                                  </td>
+                                  <td className="table-cell text-sm">{item.unit}</td>
+                                  <td className="table-cell text-right font-medium">{item.qty_ordered}</td>
+                                  <td className="table-cell text-right">
+                                    {item.status === 'received' ? (
+                                      <span className="font-medium text-green-600">{item.qty_received}</span>
+                                    ) : (
+                                      <input
+                                        type="number"
+                                        defaultValue={item.qty_ordered}
+                                        min={0}
+                                        className="w-20 px-2 py-1 border rounded text-right text-sm"
+                                        id={`qty-${item.itemId}`}
+                                      />
+                                    )}
+                                  </td>
+                                  <td className="table-cell text-right text-sm">
+                                    {item.hpp_at_order ? formatRupiah(item.hpp_at_order) : '-'}
+                                  </td>
+                                  <td className="table-cell">
+                                    <span className={itemSt.class}>{itemSt.label}</span>
+                                  </td>
+                                  <td className="table-cell">
+                                    {item.status !== 'received' && item.status !== 'cancelled' && (
+                                      <div className="flex items-center gap-1">
+                                        <button
+                                          onClick={() => {
+                                            const input = document.getElementById(`qty-${item.itemId}`) as HTMLInputElement;
+                                            const qty = parseFloat(input?.value || '0');
+                                            handleConfirmItem(item.orderId, item.itemId, qty, item.store_product_id);
+                                          }}
+                                          disabled={!!actionLoading}
+                                          className="text-xs btn-primary py-1 px-2"
+                                        >
+                                          {actionLoading === item.itemId ? (
+                                            <Loader2 className="w-3 h-3 inline animate-spin" />
+                                          ) : (
+                                            <><CheckCircle2 className="w-3 h-3 inline mr-1" />Terima</>
+                                          )}
+                                        </button>
+                                        <button
+                                          onClick={() => handleMarkKosong(item.orderId, item.itemId)}
+                                          disabled={!!actionLoading}
+                                          title="Tandai kosong / tidak tersedia"
+                                          className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"
+                                        >
+                                          {actionLoading === `kosong-${item.itemId}` ? (
+                                            <Loader2 className="w-3 h-3 inline animate-spin" />
+                                          ) : 'Kosong'}
+                                        </button>
+                                      </div>
+                                    )}
+                                    {item.status === 'received' && item.qty_received !== item.qty_ordered && (
+                                      <span className="text-[10px] text-amber-600 flex items-center gap-0.5">
+                                        <AlertTriangle className="w-3 h-3" />Selisih
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )
           )}
         </div>
       )}
@@ -2004,13 +2382,138 @@ function PesananContent() {
         </div>
       )}
 
+      {/* ══ TAB: RIWAYAT HAPUS ══════════════════════════════════════════════ */}
+      {activeTab === 'riwayat' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-gray-800">Riwayat Pesanan Dihapus</h2>
+              <p className="text-sm text-gray-500 mt-0.5">
+                Pesanan yang dihapus dapat dipulihkan atau dihapus permanen
+              </p>
+            </div>
+            <button
+              onClick={fetchDeletedOrders}
+              disabled={deletedLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 border rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${deletedLoading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
+
+          {deletedLoading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+            </div>
+          ) : deletedOrders.length === 0 ? (
+            <div className="card text-center py-16">
+              <History className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+              <p className="text-gray-500 font-medium">Tidak ada pesanan yang dihapus</p>
+              <p className="text-sm text-gray-400 mt-1">
+                Pesanan yang dihapus dari tab Penerimaan akan muncul di sini
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {deletedOrders.map((order) => {
+                const isExpanded = expandedOrder === order.id;
+                const totalItems = order.items?.length || 0;
+                return (
+                  <div key={order.id} className="card p-0 overflow-hidden border-red-100">
+                    <button
+                      onClick={() => setExpandedOrder(isExpanded ? null : order.id)}
+                      className="w-full p-4 text-left hover:bg-gray-50 transition-colors"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-gray-800 font-mono text-sm">{order.do_number}</span>
+                            <span className="badge-danger">Dihapus</span>
+                          </div>
+                          <p className="text-sm text-gray-600 mt-1">
+                            {order.supplier?.name || 'Supplier tidak diketahui'}
+                          </p>
+                          <div className="flex items-center gap-3 mt-1 text-xs text-gray-400">
+                            <span>{formatDateShort(order.order_date)}</span>
+                            <span>{totalItems} item</span>
+                          </div>
+                        </div>
+                        {isExpanded
+                          ? <ChevronUp className="w-5 h-5 text-gray-400 shrink-0" />
+                          : <ChevronDown className="w-5 h-5 text-gray-400 shrink-0" />}
+                      </div>
+                    </button>
+
+                    {isExpanded && order.items && (
+                      <div className="border-t border-gray-100">
+                        <div className="overflow-x-auto">
+                          <table className="w-full">
+                            <thead>
+                              <tr className="table-header">
+                                <th className="px-3 py-2">Produk</th>
+                                <th className="px-3 py-2">Satuan</th>
+                                <th className="px-3 py-2 text-right">Qty Pesan</th>
+                                <th className="px-3 py-2 text-right">HPP</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {order.items.map((item) => (
+                                <tr key={item.id} className="hover:bg-gray-50">
+                                  <td className="table-cell">
+                                    <p className="font-medium text-sm">{item.store_product?.name || '-'}</p>
+                                    <p className="text-xs text-gray-400 font-mono">{item.store_product?.barcode}</p>
+                                  </td>
+                                  <td className="table-cell text-sm">{item.store_product?.unit || '-'}</td>
+                                  <td className="table-cell text-right font-medium">{item.qty_ordered}</td>
+                                  <td className="table-cell text-right text-sm">
+                                    {item.hpp_at_order ? formatRupiah(item.hpp_at_order) : '-'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        <div className="px-4 py-3 bg-gray-50 flex flex-wrap justify-between gap-2">
+                          <button
+                            onClick={() => handlePermanentDeleteOrder(order.id)}
+                            disabled={!!actionLoading}
+                            className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-500 rounded-lg text-sm hover:bg-red-50 transition-colors"
+                          >
+                            {actionLoading === `perm-del-${order.id}`
+                              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              : <Trash2 className="w-3.5 h-3.5" />}
+                            Hapus Permanen
+                          </button>
+                          <button
+                            onClick={() => handleRecoverOrder(order.id)}
+                            disabled={!!actionLoading}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+                          >
+                            {actionLoading === `recover-${order.id}`
+                              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              : <Undo2 className="w-3.5 h-3.5" />}
+                            Pulihkan
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Modal konfirmasi hapus DO */}
       {deleteConfirmOrderId && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl w-full max-w-sm p-6 shadow-xl">
             <h3 className="font-semibold text-gray-800 mb-2">Hapus Pesanan?</h3>
             <p className="text-sm text-gray-500 mb-4">
-              Seluruh item dalam DO ini akan dihapus permanen. Tindakan ini tidak bisa dibatalkan.
+              Pesanan ini akan dipindahkan ke <strong>Riwayat Hapus</strong>. Kamu bisa memulihkannya kapan saja dari tab tersebut.
             </p>
             <div className="flex justify-end gap-2">
               <button
