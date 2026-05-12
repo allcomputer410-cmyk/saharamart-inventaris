@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client';
 import {
   ShoppingCart, Search, CheckCircle2, Loader2, ChevronDown, ChevronUp,
   Plus, Trash2, Send, AlertTriangle, PackageSearch, X, MonitorSmartphone,
-  ClipboardList, Package, MessageCircle, Mail, Download, Bell, RotateCcw,
+  ClipboardList, Package, MessageCircle, Mail, Download, Bell, RotateCcw, Camera,
 } from 'lucide-react';
 import { formatRupiah, formatDateShort, generateDoNumber } from '@/lib/utils';
 import type { Order } from '@/types/database';
@@ -180,6 +180,14 @@ function PesananContent() {
   const [criticalProducts, setCriticalProducts] = useState<ProductSearchResult[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
+
+  // Scanner kamera di form buat pesanan
+  const [scanMode, setScanMode] = useState(false);
+  const [scanStatus, setScanStatus] = useState('');
+  const [scanError, setScanError] = useState('');
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const animFrameRef = useRef<number | null>(null);
 
   // ── Rekap tab ─────────────────────────────────────────────────────────────
   const [rekap, setRekap] = useState<RekapSupplier[]>([]);
@@ -495,6 +503,102 @@ function PesananContent() {
     const t = setTimeout(() => handleProductSearch(productSearch), 300);
     return () => clearTimeout(t);
   }, [productSearch, handleProductSearch]);
+
+  // ── Scanner kamera di form buat pesanan ──────────────────────────────────
+  useEffect(() => {
+    if (!scanMode) return;
+    let stopped = false;
+
+    async function initScanner() {
+      try {
+        setScanError('');
+        setScanStatus('Meminta izin kamera...');
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+        streamRef.current = stream;
+        if (stopped) { stream.getTracks().forEach(t => t.stop()); return; }
+
+        const video = videoRef.current;
+        if (!video) return;
+        video.srcObject = stream;
+        setScanStatus('Menunggu kamera siap...');
+
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Timeout')), 8000);
+          const done = () => { clearTimeout(timeout); resolve(); };
+          if (video.readyState >= 3) { done(); return; }
+          video.addEventListener('playing', done, { once: true });
+          video.play().catch(reject);
+        });
+
+        if (stopped) return;
+
+        const { HTMLCanvasElementLuminanceSource } = await import('@zxing/browser');
+        const { BinaryBitmap, HybridBinarizer, DecodeHintType, BarcodeFormat, MultiFormatReader } = await import('@zxing/library');
+
+        const hints = new Map();
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+          BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A,
+          BarcodeFormat.UPC_E, BarcodeFormat.CODE_128, BarcodeFormat.CODE_39, BarcodeFormat.QR_CODE,
+        ]);
+        hints.set(DecodeHintType.TRY_HARDER, true);
+
+        const reader = new MultiFormatReader();
+        reader.setHints(hints);
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+
+        setScanStatus('Kamera aktif · Arahkan barcode ke kotak biru...');
+
+        let lastValue = '';
+        let lastTime = 0;
+
+        const scanLoop = () => {
+          if (stopped) return;
+          try {
+            if (video.readyState >= 2 && video.videoWidth > 0) {
+              const vw = video.videoWidth, vh = video.videoHeight;
+              const cropW = Math.floor(vw * 0.75), cropH = Math.floor(vh * 0.35);
+              canvas.width = cropW; canvas.height = cropH;
+              ctx.drawImage(video, Math.floor((vw - cropW) / 2), Math.floor((vh - cropH) / 2), cropW, cropH, 0, 0, cropW, cropH);
+              try {
+                const result = reader.decode(new BinaryBitmap(new HybridBinarizer(new HTMLCanvasElementLuminanceSource(canvas))));
+                const value = result.getText();
+                const now = Date.now();
+                if (value !== lastValue || now - lastTime > 2000) {
+                  lastValue = value; lastTime = now;
+                  setProductSearch(value);
+                  setShowProductDropdown(true);
+                  setScanMode(false);
+                }
+              } catch { /* no barcode in frame */ }
+            }
+          } catch { /* frame error */ }
+          animFrameRef.current = requestAnimationFrame(scanLoop);
+        };
+        animFrameRef.current = requestAnimationFrame(scanLoop);
+      } catch (err) {
+        if (!stopped) {
+          console.error('[Scanner]', err);
+          setScanStatus('');
+          setScanError('Tidak bisa mengakses kamera. Gunakan pencarian teks.');
+        }
+      }
+    }
+
+    initScanner();
+    const videoEl = videoRef.current;
+    return () => {
+      stopped = true;
+      if (animFrameRef.current) { cancelAnimationFrame(animFrameRef.current); animFrameRef.current = null; }
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+      if (videoEl) videoEl.srcObject = null;
+      setScanStatus('');
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanMode]);
 
   // ── Handlers: Buat Pesanan ────────────────────────────────────────────────
 
@@ -1114,6 +1218,7 @@ function PesananContent() {
                     setShowCreateForm(false);
                     setPendingItems([]);
                     setProductSearch('');
+                    setScanMode(false);
                     sessionStorage.removeItem(`pesanan_draft_${storeId}`);
                   }}
                   className="p-1 hover:bg-gray-200 rounded-lg"
@@ -1123,19 +1228,31 @@ function PesananContent() {
               </div>
 
               {/* Pencarian produk */}
-              <div className="relative">
+              <div className="space-y-2">
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="Cari produk (nama atau barcode)..."
-                    value={productSearch}
-                    onChange={(e) => { setProductSearch(e.target.value); setShowProductDropdown(true); }}
-                    onFocus={() => setShowProductDropdown(true)}
-                    className="input-field pl-10"
-                  />
-                </div>
-                {showProductDropdown && productSearch.length >= 2 && (
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Cari produk (nama atau barcode)..."
+                      value={productSearch}
+                      onChange={(e) => { setProductSearch(e.target.value); setShowProductDropdown(true); }}
+                      onFocus={() => setShowProductDropdown(true)}
+                      className="input-field pl-10 pr-10"
+                    />
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setScanMode((v) => !v)}
+                      className={`absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-lg transition-colors ${
+                        scanMode ? 'bg-blue-100 text-blue-600' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                      }`}
+                      title="Scan barcode dengan kamera"
+                    >
+                      <Camera className="w-4 h-4" />
+                    </button>
+                  </div>
+                  {showProductDropdown && productSearch.length >= 2 && (
                   <div className="absolute top-full left-0 right-0 bg-white border rounded-lg shadow-lg mt-1 z-20 max-h-64 overflow-y-auto">
                     {searchingProduct ? (
                       <div className="p-4 text-center text-gray-400">
@@ -1171,6 +1288,25 @@ function PesananContent() {
                         </button>
                       );
                     })}
+                  </div>
+                )}
+                </div>
+                {/* Camera view */}
+                {scanMode && (
+                  <div className="rounded-xl overflow-hidden border border-blue-200">
+                    {scanError ? (
+                      <div className="p-3 text-red-600 text-xs text-center bg-red-50 rounded-xl">{scanError}</div>
+                    ) : (
+                      <div className="relative bg-black rounded-t-xl overflow-hidden">
+                        <video ref={videoRef} autoPlay playsInline muted className="w-full" style={{ maxHeight: '200px', objectFit: 'cover' }} />
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                          <div className="border-2 border-blue-400 rounded" style={{ width: '75%', height: '35%' }} />
+                        </div>
+                      </div>
+                    )}
+                    {scanStatus && (
+                      <p className="text-xs text-center text-blue-600 py-1.5 font-medium bg-white">{scanStatus}</p>
+                    )}
                   </div>
                 )}
               </div>
