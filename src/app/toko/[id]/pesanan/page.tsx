@@ -302,15 +302,16 @@ function PesananContent() {
   // ── Fetch rekap (Rekap tab) ───────────────────────────────────────────────
   const fetchRekap = useCallback(async () => {
     setRekapLoading(true);
+
+    // Query 1: ambil active orders + items + store_product_id mentah
     const { data: activeOrders } = await supabase
       .from('orders')
       .select(`
-        id, do_number, status,
+        id, do_number, status, supplier_id,
         items:order_items(
           id, qty_ordered, hpp_at_order, status,
           store_product:store_products(
-            id, barcode, name, unit, hpp,
-            supplier:suppliers(id, name, phone, email)
+            id, barcode, name, unit, hpp, supplier_id
           )
         )
       `)
@@ -318,6 +319,63 @@ function PesananContent() {
       .in('status', ['draft', 'ordered'])
       .order('created_at', { ascending: false });
 
+    // Kumpulkan semua store_product_id dari order items
+    const productIds = new Set<string>();
+    (activeOrders || []).forEach((order: Record<string, unknown>) => {
+      const items = Array.isArray(order.items) ? order.items : [];
+      (items as Record<string, unknown>[]).forEach((item) => {
+        const sp = Array.isArray(item.store_product) ? item.store_product[0] : item.store_product;
+        const spData = sp as Record<string, unknown> | null;
+        if (spData?.id) productIds.add(spData.id as string);
+      });
+    });
+
+    // Query 2: cari supplier dari riwayat pembelian masuk (purchases) per produk
+    // Ini sumber paling akurat karena supplier_id di purchases terisi dari sync iPOS
+    const productSupplierMap: Record<string, string> = {};
+    if (productIds.size > 0) {
+      const { data: purchaseItems } = await supabase
+        .from('purchase_items')
+        .select('store_product_id, purchases!inner(supplier_id)')
+        .in('store_product_id', Array.from(productIds))
+        .order('created_at', { ascending: false })
+        .limit(500);
+
+      (purchaseItems || []).forEach((pi: Record<string, unknown>) => {
+        const productId = pi.store_product_id as string;
+        if (productSupplierMap[productId]) return; // sudah dapat supplier terbaru
+        const purchase = Array.isArray(pi.purchases) ? pi.purchases[0] : pi.purchases;
+        const pData = purchase as Record<string, unknown> | null;
+        if (pData?.supplier_id) productSupplierMap[productId] = pData.supplier_id as string;
+      });
+    }
+
+    // Kumpulkan semua supplier_id unik untuk di-fetch detail-nya
+    const supplierIdSet = new Set<string>();
+    Object.values(productSupplierMap).forEach((sid) => supplierIdSet.add(sid));
+    (activeOrders || []).forEach((order: Record<string, unknown>) => {
+      if (order.supplier_id) supplierIdSet.add(order.supplier_id as string);
+      const items = Array.isArray(order.items) ? order.items : [];
+      (items as Record<string, unknown>[]).forEach((item) => {
+        const sp = Array.isArray(item.store_product) ? item.store_product[0] : item.store_product;
+        const spData = sp as Record<string, unknown> | null;
+        if (spData?.supplier_id) supplierIdSet.add(spData.supplier_id as string);
+      });
+    });
+
+    // Query 3: fetch detail supplier secara eksplisit
+    const supplierDetail: Record<string, { name: string; phone?: string; email?: string }> = {};
+    if (supplierIdSet.size > 0) {
+      const { data: suppliers } = await supabase
+        .from('suppliers')
+        .select('id, name, phone, email')
+        .in('id', Array.from(supplierIdSet));
+      (suppliers || []).forEach((s: Record<string, string>) => {
+        supplierDetail[s.id] = { name: s.name, phone: s.phone, email: s.email };
+      });
+    }
+
+    // Susun rekap: group per supplier
     const supplierMap = new Map<string, RekapSupplier>();
     (activeOrders || []).forEach((rawOrder: Record<string, unknown>) => {
       const doNumber = rawOrder.do_number as string;
@@ -328,17 +386,21 @@ function PesananContent() {
         const spData = sp as Record<string, unknown> | null;
         if (!spData) return;
 
-        // Kelompokkan berdasarkan supplier produk (bukan supplier order)
-        const rawSup = Array.isArray(spData.supplier) ? (spData.supplier as unknown[])[0] : spData.supplier;
-        const supData = rawSup as Record<string, string> | null;
-        const supplierId = supData?.id || 'unknown';
+        const productId = spData.id as string;
+        // Prioritas: pembelian masuk → order supplier → store_product supplier → unknown
+        const supplierId = productSupplierMap[productId]
+          || (rawOrder.supplier_id as string)
+          || (spData.supplier_id as string)
+          || 'unknown';
+
+        const sup = supplierDetail[supplierId];
 
         if (!supplierMap.has(supplierId)) {
           supplierMap.set(supplierId, {
             supplierId,
-            supplierName: supData?.name || 'Tanpa Supplier',
-            supplierPhone: supData?.phone,
-            supplierEmail: supData?.email,
+            supplierName: sup?.name || 'Tanpa Supplier',
+            supplierPhone: sup?.phone,
+            supplierEmail: sup?.email,
             items: [],
             totalItems: 0,
             totalValue: 0,
@@ -348,7 +410,6 @@ function PesananContent() {
         const entry = supplierMap.get(supplierId)!;
         const hpp = (item.hpp_at_order as number) || (spData.hpp as number) || 0;
         const qty = (item.qty_ordered as number) || 0;
-        const subtotal = qty * hpp;
 
         entry.items.push({
           productName: (spData.name as string) || '-',
@@ -356,11 +417,11 @@ function PesananContent() {
           unit: (spData.unit as string) || '-',
           qty,
           hpp,
-          subtotal,
+          subtotal: qty * hpp,
           doNumber,
         });
         entry.totalItems += qty;
-        entry.totalValue += subtotal;
+        entry.totalValue += qty * hpp;
       });
     });
 
