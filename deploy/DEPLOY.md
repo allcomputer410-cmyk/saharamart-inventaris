@@ -20,10 +20,9 @@ yang di-proxy Caddy ke publik lewat HTTPS.
 ## Langkah
 
 ```bash
-# 1. Ambil kode
-git clone https://github.com/allcomputer410-cmyk/saharamart-inventaris.git
-cd saharamart-inventaris
-git checkout clone/inventaris
+# 1. Ambil kode (repo self-hosted, branch default: main)
+git clone https://github.com/allcomputer410-cmyk/saharamart-inventaris-selfhost.git
+cd saharamart-inventaris-selfhost
 cd deploy
 
 # 2. Buat secret acak
