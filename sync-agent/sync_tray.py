@@ -278,7 +278,7 @@ def _monitor_loop(icon: pystray.Icon):
                     last_error_notif = now
                     notify(
                         "Sync Agent — Koneksi Terputus!",
-                        "Gagal sync ke Supabase atau iPOS tidak merespons.\n"
+                        "Gagal sync ke backend inventaris atau iPOS tidak merespons.\n"
                         "Klik kanan icon → Buka Log untuk detail.",
                         is_error=True,
                     )

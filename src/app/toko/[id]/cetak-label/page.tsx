@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { createClient } from '@/lib/backend/client';
 import { formatRupiah } from '@/lib/utils';
 import {
   Printer, Search, AlertTriangle, TrendingUp, Tag, X,

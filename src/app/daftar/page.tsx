@@ -1,16 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
 import { Store, Eye, EyeOff, Loader2, CheckCircle } from 'lucide-react';
 
 interface StoreOption { id: string; name: string; code: string; }
 
 export default function DaftarPage() {
   const router = useRouter();
-  const supabaseRef = useRef(createClient());
-  const supabase = supabaseRef.current;
 
   const [stores, setStores] = useState<StoreOption[]>([]);
   const [name, setName] = useState('');
@@ -25,8 +22,7 @@ export default function DaftarPage() {
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
-    supabase.from('stores').select('id, name, code').eq('is_active', true).order('name')
-      .then(({ data }) => setStores(data || []));
+    fetch('/api/stores').then(r => r.json()).then(({ data }) => setStores(data || [])).catch(() => setError('Daftar toko belum tersedia'));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -37,7 +33,7 @@ export default function DaftarPage() {
     if (!name.trim()) { setError('Nama wajib diisi'); return; }
     if (!email.trim()) { setError('Email wajib diisi'); return; }
     if (!storeId) { setError('Pilih toko terlebih dahulu'); return; }
-    if (password.length < 6) { setError('Password minimal 6 karakter'); return; }
+    if (password.length < 8) { setError('Password minimal 8 karakter'); return; }
     if (password !== confirmPassword) { setError('Password dan konfirmasi tidak cocok'); return; }
 
     setLoading(true);

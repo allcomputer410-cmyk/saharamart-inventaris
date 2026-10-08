@@ -6,15 +6,23 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "backend:setup": "node scripts/setup-local.cjs",
+    "backend:up": "docker compose --env-file backend/.env -f backend/compose.yml up -d",
+    "backend:restore": "node scripts/restore-local.cjs",
+    "backend:verify": "node scripts/verify-local.cjs",
+    "backend:sync-key": "node scripts/create-sync-key.cjs",
+    "test:backend": "node scripts/test-backend.cjs"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.3.2",
+    "@supabase/postgrest-js": "^2.117.3",
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.95.3",
     "@types/jsbarcode": "^3.11.4",
     "@zxing/browser": "^0.1.5",
     "@zxing/library": "^0.21.3",
+    "bcryptjs": "^3.0.3",
     "clsx": "^2.1.1",
     "html2canvas": "^1.4.1",
     "html5-qrcode": "^2.3.8",
@@ -25,15 +33,16 @@
     "react-dom": "^18",
     "recharts": "^3.7.0",
     "tailwind-merge": "^3.4.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/pg": "^8.23.1",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "eslint": "^8",
     "eslint-config-next": "14.2.35",
-    "pg": "^8.18.0",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
     "typescript": "^5"

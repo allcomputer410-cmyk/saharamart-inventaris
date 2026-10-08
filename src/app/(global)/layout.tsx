@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { createClient } from '@/lib/supabase/client';
+import { createClient } from '@/lib/backend/client';
 import {
   LayoutDashboard,
   Users,

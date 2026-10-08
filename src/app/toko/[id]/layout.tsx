@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useSyncExternalStore } from 'react';
 import { useParams, usePathname, useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { createClient } from '@/lib/backend/client';
 import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
 import { Loader2 } from 'lucide-react';

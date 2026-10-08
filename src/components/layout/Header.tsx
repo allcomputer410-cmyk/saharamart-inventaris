@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { createClient } from '@/lib/backend/client';
 import { Menu, Bell, LogOut, User, X, ChevronRight } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
 
@@ -71,27 +71,10 @@ export default function Header({ onMenuClick, pageTitle, userName = '', userRole
 
   // Realtime: dengarkan INSERT notifikasi baru
   useEffect(() => {
-    const channel = supabase
-      .channel('header-notifications')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'notifications',
-        },
-        (payload) => {
-          const n = payload.new as Notification;
-          // Hanya tampilkan jika untuk toko ini atau global (store_id null)
-          if (!n.is_read && (n.store_id === storeId || n.store_id === null)) {
-            setNotifications((prev) => [n, ...prev].slice(0, 50));
-            setUnreadCount((c) => c + 1);
-          }
-        }
-      )
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void fetchNotifications();
+    }, 15000);
+    return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId]);
 

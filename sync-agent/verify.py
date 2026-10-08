@@ -1,8 +1,8 @@
 """
-verify.py — Verifikasi kelengkapan data iPOS → Supabase
+verify.py — Verifikasi kelengkapan data iPOS → Inventory API
 =========================================================
 Script ini membandingkan jumlah data di iPOS (sumber)
-dengan data yang sudah masuk ke Supabase (tujuan).
+dengan data yang sudah masuk ke Inventory API (tujuan).
 
 Jalankan: python verify.py
 """
@@ -37,19 +37,19 @@ def connect_ipos():
         connect_timeout=10,
     )
 
-# ── Query Supabase REST API ────────────────────────────────────
+# ── Query Inventory API REST API ────────────────────────────────────
 def sb_count(table, params=None):
-    """Hitung baris di tabel Supabase (dengan pagination)."""
+    """Hitung baris di tabel Inventory API (dengan pagination)."""
     headers = {
-        "apikey": config.SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {config.SUPABASE_SERVICE_KEY}",
+        "apikey": config.INVENTORY_SYNC_TOKEN,
+        "Authorization": f"Bearer {config.INVENTORY_SYNC_TOKEN}",
         "Prefer": "count=exact",
         "Range": "0-0",   # Ambil 0 baris, hanya butuh header Count
     }
-    url = f"{config.SUPABASE_URL.rstrip('/')}/rest/v1/{table}"
+    url = f"{config.INVENTORY_API_URL.rstrip('/')}/{table}"
     r = requests.get(url, headers=headers, params=params or {})
     r.raise_for_status()
-    # Supabase mengembalikan jumlah di header Content-Range: 0-0/TOTAL
+    # Inventory API mengembalikan jumlah di header Content-Range: 0-0/TOTAL
     content_range = r.headers.get("Content-Range", "0-0/0")
     try:
         total = int(content_range.split("/")[-1])
@@ -64,10 +64,10 @@ def sb_select_all(table, params=None):
     offset = 0
     p = dict(params or {})
     headers = {
-        "apikey": config.SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {config.SUPABASE_SERVICE_KEY}",
+        "apikey": config.INVENTORY_SYNC_TOKEN,
+        "Authorization": f"Bearer {config.INVENTORY_SYNC_TOKEN}",
     }
-    url = f"{config.SUPABASE_URL.rstrip('/')}/rest/v1/{table}"
+    url = f"{config.INVENTORY_API_URL.rstrip('/')}/{table}"
     while True:
         p["limit"] = page_size
         p["offset"] = offset
@@ -100,7 +100,7 @@ def status_line(label, ipos_count, sb_count_val):
         status = f"{RED}KURANG {diff:,} data{RESET}"
 
     print(f"  {BOLD}{label:<22}{RESET} [{bar}] {pct_str:>4}  "
-          f"iPOS={ipos_count:>6,}  Supabase={sb_count_val:>6,}  {status}")
+          f"iPOS={ipos_count:>6,}  Inventory API={sb_count_val:>6,}  {status}")
 
 # ══════════════════════════════════════════════════════════════
 # MAIN
@@ -122,12 +122,12 @@ def main():
         err(f"Gagal konek iPOS: {e}")
         sys.exit(1)
 
-    print(f"{BOLD}[2/6] Koneksi ke Supabase...{RESET}")
+    print(f"{BOLD}[2/6] Koneksi ke Inventory API...{RESET}")
     try:
         sb_count("stores")
-        ok(f"Supabase: {config.SUPABASE_URL}")
+        ok(f"Inventory API: {config.INVENTORY_API_URL}")
     except Exception as e:
-        err(f"Gagal konek Supabase: {e}")
+        err(f"Gagal konek Inventory API: {e}")
         sys.exit(1)
 
     # ── 2. Cari store yang cocok dengan iPOS ──────────────────
@@ -137,13 +137,13 @@ def main():
     print()
     info(f"Kantor di iPOS: {list(ipos_kantors.keys())}")
 
-    # Ambil semua store di Supabase
+    # Ambil semua store di Inventory API
     all_stores = sb_select_all("stores", {"select": "id,code,name,ipos_kodekantor,is_active"})
     if not all_stores:
-        err("Tidak ada toko di Supabase. Jalankan insert_saharamart.sql dulu.")
+        err("Tidak ada toko di Inventory API. Jalankan insert_saharamart.sql dulu.")
         sys.exit(1)
 
-    # Cocokkan: cari store Supabase yang ipos_kodekantor-nya ada di iPOS
+    # Cocokkan: cari store Inventory API yang ipos_kodekantor-nya ada di iPOS
     matched_stores = [
         s for s in all_stores
         if s.get("ipos_kodekantor") and s["ipos_kodekantor"] in ipos_kantors
@@ -151,15 +151,15 @@ def main():
 
     if not matched_stores:
         print()
-        warn("Tidak ada store di Supabase yang cocok dengan kantor iPOS!")
+        warn("Tidak ada store di Inventory API yang cocok dengan kantor iPOS!")
         print()
-        print(f"  Store di Supabase:")
+        print(f"  Store di Inventory API:")
         for s in all_stores:
             print(f"    - {s['code']}: {s['name']} (ipos_kodekantor={s.get('ipos_kodekantor', '-')})")
         print()
         print(f"  Kantor di iPOS: {list(ipos_kantors.keys())}")
         print()
-        print(f"  Fix: Update ipos_kodekantor di Supabase agar sesuai dengan kode kantor iPOS di atas.")
+        print(f"  Fix: Update ipos_kodekantor di Inventory API agar sesuai dengan kode kantor iPOS di atas.")
         print(f"  SQL: UPDATE stores SET ipos_kodekantor='UTM' WHERE code='SM01';")
         sys.exit(1)
 
@@ -206,9 +206,9 @@ def main():
 
     ok("Selesai hitung iPOS")
 
-    # ── 4. Hitung di Supabase ──────────────────────────────────
+    # ── 4. Hitung di Inventory API ──────────────────────────────────
     print()
-    print(f"{BOLD}[4/6] Menghitung data di Supabase...{RESET}")
+    print(f"{BOLD}[4/6] Menghitung data di Inventory API...{RESET}")
 
     sb_products    = sb_count("store_products", {"store_id": f"eq.{store_id}"})
     sb_stock       = sb_count("stock",          {"store_id": f"eq.{store_id}"})
@@ -217,13 +217,13 @@ def main():
     sb_brands      = sb_count("brands")
     sb_sales_days  = sb_count("daily_sales",    {"store_id": f"eq.{store_id}"})
 
-    ok("Selesai hitung Supabase")
+    ok("Selesai hitung Inventory API")
 
     # ── 5. Bandingkan ──────────────────────────────────────────
     print()
     print(f"{BOLD}[5/6] Perbandingan Data:{RESET}")
     print()
-    print(f"  {'Kategori':<22} {'Progress':>22}  {'iPOS':>8}  {'Supabase':>10}  Status")
+    print(f"  {'Kategori':<22} {'Progress':>22}  {'iPOS':>8}  {'Inventory API':>10}  Status")
     print(f"  {'-'*80}")
 
     status_line("Produk (master)",    ipos_products,       sb_products)
@@ -235,9 +235,9 @@ def main():
 
     # ── 6. Cek produk yang hilang (sample) ────────────────────
     print()
-    print(f"{BOLD}[6/6] Cek produk yang belum masuk Supabase...{RESET}")
+    print(f"{BOLD}[6/6] Cek produk yang belum masuk Inventory API...{RESET}")
 
-    # Ambil semua kodeitem yang ada di Supabase
+    # Ambil semua kodeitem yang ada di Inventory API
     sb_items = sb_select_all("store_products", {
         "store_id": f"eq.{store_id}",
         "select": "ipos_kodeitem",
@@ -257,9 +257,9 @@ def main():
     missing_count = len(missing)
 
     if missing_count == 0:
-        ok(f"Semua {ipos_products:,} produk sudah ada di Supabase!")
+        ok(f"Semua {ipos_products:,} produk sudah ada di Inventory API!")
     else:
-        warn(f"{missing_count:,} produk belum masuk Supabase:")
+        warn(f"{missing_count:,} produk belum masuk Inventory API:")
         # Tampilkan max 20 contoh
         sample_missing = [
             r for r in ipos_items

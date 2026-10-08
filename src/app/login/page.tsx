@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { createClient } from '@/lib/backend/client';
 import { Store, Eye, EyeOff, Loader2 } from 'lucide-react';
 
 export default function LoginPage() {

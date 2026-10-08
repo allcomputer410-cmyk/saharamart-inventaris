@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
-import { Save, Loader2, ToggleLeft, ToggleRight } from 'lucide-react';
+import { createClient } from '@/lib/backend/client';
+import { Save, Loader2, ToggleLeft, ToggleRight, KeyRound, Eye, EyeOff } from 'lucide-react';
 import type { Store } from '@/types/database';
 
 export default function SettingsPage() {
@@ -15,6 +15,14 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
+
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showOld, setShowOld] = useState(false);
+  const [showNew, setShowNew] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState<{ text: string; ok: boolean } | null>(null);
 
   useEffect(() => {
     async function fetchStore() {
@@ -31,6 +39,44 @@ export default function SettingsPage() {
     fetchStore();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId]);
+
+  const handleChangePassword = async () => {
+    setPasswordMessage(null);
+    if (newPassword.length < 8) {
+      setPasswordMessage({ text: 'Password baru minimal 8 karakter', ok: false });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordMessage({ text: 'Konfirmasi password tidak cocok', ok: false });
+      return;
+    }
+    setChangingPassword(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user?.email) {
+      setPasswordMessage({ text: 'Sesi tidak valid, silakan login ulang', ok: false });
+      setChangingPassword(false);
+      return;
+    }
+    const { error: verifyError } = await supabase.auth.signInWithPassword({
+      email: user.email,
+      password: oldPassword,
+    });
+    if (verifyError) {
+      setPasswordMessage({ text: 'Password lama salah', ok: false });
+      setChangingPassword(false);
+      return;
+    }
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) {
+      setPasswordMessage({ text: 'Gagal mengubah password. Coba lagi.', ok: false });
+    } else {
+      setPasswordMessage({ text: 'Password berhasil diubah', ok: true });
+      setOldPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    }
+    setChangingPassword(false);
+  };
 
   const handleSave = async () => {
     if (!store) return;
@@ -272,6 +318,90 @@ export default function SettingsPage() {
                 <span className="text-gray-400">Nonaktif</span>
               </>
             )}
+          </button>
+        </div>
+      </div>
+
+      {/* Keamanan Akun */}
+      <div className="card space-y-4">
+        <div className="flex items-center gap-2">
+          <KeyRound className="w-4 h-4 text-gray-600" />
+          <h3 className="font-semibold text-gray-800">Keamanan Akun</h3>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Password Lama</label>
+          <div className="relative">
+            <input
+              type={showOld ? 'text' : 'password'}
+              value={oldPassword}
+              onChange={(e) => setOldPassword(e.target.value)}
+              placeholder="Masukkan password lama"
+              className="input-field pr-10"
+            />
+            <button
+              type="button"
+              onClick={() => setShowOld(!showOld)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            >
+              {showOld ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Password Baru</label>
+          <div className="relative">
+            <input
+              type={showNew ? 'text' : 'password'}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="Minimal 6 karakter"
+              className="input-field pr-10"
+            />
+            <button
+              type="button"
+              onClick={() => setShowNew(!showNew)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            >
+              {showNew ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Konfirmasi Password Baru</label>
+          <input
+            type="password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            placeholder="Ulangi password baru"
+            className="input-field"
+          />
+        </div>
+
+        {passwordMessage && (
+          <div
+            className={`text-sm px-3 py-2 rounded-lg ${
+              passwordMessage.ok ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'
+            }`}
+          >
+            {passwordMessage.text}
+          </div>
+        )}
+
+        <div className="flex justify-end">
+          <button
+            onClick={handleChangePassword}
+            disabled={changingPassword || !oldPassword || !newPassword || !confirmPassword}
+            className="btn-primary flex items-center gap-2 disabled:opacity-50"
+          >
+            {changingPassword ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <KeyRound className="w-4 h-4" />
+            )}
+            Ubah Password
           </button>
         </div>
       </div>

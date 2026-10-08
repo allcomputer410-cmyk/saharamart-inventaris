@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { createClient } from '@/lib/backend/client';
 import { formatRupiah } from '@/lib/utils';
 import {
   FileText, Copy, MessageCircle, ChevronLeft, ChevronRight,
@@ -244,7 +244,7 @@ export default function LaporanPage() {
 
       // Purchase orders
       const { data: pos } = await supabase
-        .from('purchase_orders').select('id, supplier_id').eq('store_id', storeId).neq('status', 'draft')
+        .from('orders').select('id, supplier_id').eq('store_id', storeId).neq('status', 'draft')
         .gte('created_at', `${wStart}T00:00:00`).lte('created_at', `${wEnd}T23:59:59`);
       const doCount = (pos || []).length;
       const supplierCount = new Set(((pos || []) as { supplier_id: string }[]).map(p => p.supplier_id)).size;

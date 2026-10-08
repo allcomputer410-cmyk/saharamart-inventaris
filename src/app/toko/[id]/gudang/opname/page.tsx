@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { createClient } from '@/lib/backend/client';
 import { ClipboardList, Plus, X, Loader2, ChevronDown, ChevronUp, CheckCircle2 } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────

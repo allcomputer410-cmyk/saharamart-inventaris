@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Sync Agent iPOS 4 (PostgreSQL 8.4) → Supabase
-Membaca data dari database iPOS lokal dan mengirim ke Supabase cloud.
+Sync Agent iPOS 4 (PostgreSQL 8.4) → Inventory API
+Membaca data dari database iPOS lokal dan mengirim ke backend inventaris.
 
 Tabel yang disync:
   - tbl_item + tbl_itemstok → store_products + stock
@@ -75,10 +75,10 @@ log = logging.getLogger("sync_agent")
 
 
 # ---------------------------------------------------------------------------
-# Helper: Supabase REST API
+# Helper: Inventory API REST API
 # ---------------------------------------------------------------------------
-class SupabaseClient:
-    """Lightweight Supabase REST client using service_role key."""
+class InventoryClient:
+    """REST client using a store-scoped inventory sync token."""
 
     REQUEST_TIMEOUT = 30  # detik per request
     MAX_RETRIES = 3
@@ -87,14 +87,13 @@ class SupabaseClient:
     def __init__(self, url: str, key: str):
         self.base = url.rstrip("/")
         self.headers = {
-            "apikey": key,
-            "Authorization": f"Bearer {key}",
+                        "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
             "Prefer": "return=representation",
         }
 
     def _url(self, table: str) -> str:
-        return f"{self.base}/rest/v1/{table}"
+        return f"{self.base}/{table}"
 
     def _do_request(self, method: str, url: str, **kwargs) -> requests.Response:
         """Execute HTTP request dengan retry + exponential backoff untuk 5xx/502."""
@@ -108,7 +107,7 @@ class SupabaseClient:
                     if attempt < self.MAX_RETRIES - 1:
                         delay = self.RETRY_DELAYS[attempt]
                         log.warning(
-                            f"Supabase {r.status_code} pada {url.split('/')[-1]} "
+                            f"Inventory API {r.status_code} pada {url.split('/')[-1]} "
                             f"(attempt {attempt+1}/{self.MAX_RETRIES}) — retry dalam {delay}s"
                         )
                         time.sleep(delay)
@@ -156,10 +155,10 @@ class SupabaseClient:
         if not r.ok:
             try:
                 err = r.json()
-                log.error(f"Supabase {table} error {r.status_code}: "
+                log.error(f"Inventory API {table} error {r.status_code}: "
                           f"{err.get('message','')} | {err.get('details','')}")
             except Exception:
-                log.error(f"Supabase {table} error {r.status_code}: {r.text[:300]}")
+                log.error(f"Inventory API {table} error {r.status_code}: {r.text[:300]}")
         r.raise_for_status()
         return r.json()
 
@@ -181,7 +180,7 @@ class SupabaseClient:
     def rpc(self, fn_name: str, params: Optional[dict] = None) -> dict:
         r = self._do_request(
             "POST",
-            f"{self.base}/rest/v1/rpc/{fn_name}",
+            f"{self.base}/rpc/{fn_name}",
             headers=self.headers,
             json=params or {},
         )
@@ -239,7 +238,7 @@ def get_ipos_connection(store: dict = None):
 # ---------------------------------------------------------------------------
 # Sync Log Management
 # ---------------------------------------------------------------------------
-def create_sync_log(sb: SupabaseClient, store_id: str, sync_type: str) -> str:
+def create_sync_log(sb: InventoryClient, store_id: str, sync_type: str) -> str:
     """Create a sync_log entry and return its ID."""
     rows = sb.insert("sync_log", [{
         "store_id": store_id,
@@ -250,7 +249,7 @@ def create_sync_log(sb: SupabaseClient, store_id: str, sync_type: str) -> str:
     return rows[0]["id"]
 
 
-def complete_sync_log(sb: SupabaseClient, log_id: str, records: int, errors: list = None):
+def complete_sync_log(sb: InventoryClient, log_id: str, records: int, errors: list = None):
     """Mark sync_log as completed."""
     status = "success" if not errors else "partial"
     sb.update("sync_log", {
@@ -261,7 +260,7 @@ def complete_sync_log(sb: SupabaseClient, log_id: str, records: int, errors: lis
     }, {"id": log_id})
 
 
-def fail_sync_log(sb: SupabaseClient, log_id: str, error_msg: str):
+def fail_sync_log(sb: InventoryClient, log_id: str, error_msg: str):
     """Mark sync_log as failed."""
     sb.update("sync_log", {
         "completed_at": datetime.utcnow().isoformat(),
@@ -273,7 +272,7 @@ def fail_sync_log(sb: SupabaseClient, log_id: str, error_msg: str):
 # ---------------------------------------------------------------------------
 # Audit Log
 # ---------------------------------------------------------------------------
-def audit(sb: SupabaseClient, store_id: str, action: str, entity_type: str, detail: dict = None):
+def audit(sb: InventoryClient, store_id: str, action: str, entity_type: str, detail: dict = None):
     """Insert audit log entry."""
     try:
         sb.insert("audit_log", [{
@@ -289,7 +288,7 @@ def audit(sb: SupabaseClient, store_id: str, action: str, entity_type: str, deta
 # ---------------------------------------------------------------------------
 # SYNC: Products (tbl_item → store_products)
 # ---------------------------------------------------------------------------
-def sync_products(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str) -> int:
+def sync_products(ipos_conn, sb: InventoryClient, store_id: str, kodekantor: str) -> int:
     """Sync master products from iPOS tbl_item to store_products."""
     log.info(f"Syncing products for store {kodekantor}...")
 
@@ -385,7 +384,7 @@ def sync_products(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str)
 # ---------------------------------------------------------------------------
 # SYNC: Stock (tbl_itemstok → stock)
 # ---------------------------------------------------------------------------
-def sync_stock(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str) -> int:
+def sync_stock(ipos_conn, sb: InventoryClient, store_id: str, kodekantor: str) -> int:
     """Sync stock quantities from iPOS tbl_itemstok to stock table."""
     log.info(f"Syncing stock for store {kodekantor}...")
 
@@ -487,7 +486,7 @@ def sync_stock(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str) ->
 # ---------------------------------------------------------------------------
 # SYNC: Sales (tbl_ikhd + tbl_ikdt → daily_sales + daily_sale_items)
 # ---------------------------------------------------------------------------
-def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
+def sync_sales(ipos_conn, sb: InventoryClient, store_id: str, kodekantor: str,
                days_back: int = 30) -> int:
     """Sync daily sales dari iPOS ke daily_sales + daily_sale_items."""
     log.info(f"Syncing sales for store {kodekantor} (last {days_back} days)...")
@@ -623,35 +622,9 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
             "synced_at": now,
         }]
 
-        result = sb.upsert("daily_sales", daily_data, on_conflict="store_id,sale_date")
-
-        # Insert sale items
-        if result and sale_items:
-            daily_sale_id = result[0]["id"]
-
-            # Hapus item lama untuk hari ini sebelum insert ulang
-            try:
-                del_resp = sb.delete(
-                    "daily_sale_items",
-                    {"daily_sale_id": f"eq.{daily_sale_id}"},
-                )
-                if not del_resp.ok:
-                    log.warning(f"Delete items {sale_date}: HTTP {del_resp.status_code}")
-            except Exception as e:
-                log.warning(f"Delete items {sale_date} gagal: {e}")
-
-            # Insert item baru
-            for si in sale_items:
-                si["daily_sale_id"] = daily_sale_id
-            try:
-                BATCH = 500
-                for i in range(0, len(sale_items), BATCH):
-                    sb.insert("daily_sale_items", sale_items[i : i + BATCH])
-                total_items_inserted += len(sale_items)
-                log.debug(f"{sale_date}: inserted {len(sale_items)} sale items")
-            except Exception as e:
-                log.error(f"Insert daily_sale_items gagal untuk {sale_date}: {e}")
-                raise
+        # Replace header + detail in one database transaction. Safe to retry.
+        sb.rpc("sync_daily_sales", {"p_daily": daily_data[0], "p_items": sale_items})
+        total_items_inserted += len(sale_items)
 
         count += 1
 
@@ -663,7 +636,7 @@ def sync_sales(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
 # ---------------------------------------------------------------------------
 # SYNC: Suppliers (tbl_supel → suppliers + store_suppliers)
 # ---------------------------------------------------------------------------
-def sync_suppliers(ipos_conn, sb: SupabaseClient, store_id: str = None) -> int:
+def sync_suppliers(ipos_conn, sb: InventoryClient, store_id: str = None) -> int:
     """Sync suppliers from iPOS tbl_supel to suppliers + store_suppliers tables."""
     log.info("Syncing suppliers...")
 
@@ -683,7 +656,7 @@ def sync_suppliers(ipos_conn, sb: SupabaseClient, store_id: str = None) -> int:
         log.info("No suppliers found in iPOS")
         return 0
 
-    # Get existing suppliers in Supabase
+    # Get existing suppliers in Inventory API
     existing = sb.select("suppliers", {"select": "id,ipos_kode,code"})
     existing_by_ipos = {s["ipos_kode"]: s["id"] for s in existing if s.get("ipos_kode")}
     existing_by_code = {s["code"]: s["id"] for s in existing if s.get("code")}
@@ -755,9 +728,9 @@ def sync_suppliers(ipos_conn, sb: SupabaseClient, store_id: str = None) -> int:
 # ---------------------------------------------------------------------------
 # SYNC: Purchases (tbl_imhd + tbl_imdt → purchases + purchase_items)
 # ---------------------------------------------------------------------------
-def sync_purchases(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str,
+def sync_purchases(ipos_conn, sb: InventoryClient, store_id: str, kodekantor: str,
                    days_back: int = 90) -> int:
-    """Sync purchase invoices from iPOS tbl_imhd + tbl_imdt to Supabase."""
+    """Sync purchase invoices from iPOS tbl_imhd + tbl_imdt to Inventory API."""
     log.info(f"Syncing purchases for store {kodekantor} (last {days_back} days)...")
 
     since_date = (date.today() - timedelta(days=days_back)).isoformat()
@@ -799,7 +772,7 @@ def sync_purchases(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str
         key = d["notransaksi"]
         details_map.setdefault(key, []).append(d)
 
-    # Build lookup maps from Supabase
+    # Build lookup maps from Inventory API
     existing = sb.select("purchases", {
         "store_id": f"eq.{store_id}",
         "select": "id,ipos_notransaksi",
@@ -909,7 +882,7 @@ def sync_purchases(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str
 # ---------------------------------------------------------------------------
 # SYNC: Discounts (tbl_itemdisp → store_item_discounts)
 # ---------------------------------------------------------------------------
-def sync_discounts(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str) -> int:
+def sync_discounts(ipos_conn, sb: InventoryClient, store_id: str, kodekantor: str) -> int:
     """Sync discount data from iPOS tbl_itemdisp + tbl_itemdispdt to store_item_discounts.
 
     Struktur iPOS:
@@ -1045,7 +1018,7 @@ def sync_discounts(ipos_conn, sb: SupabaseClient, store_id: str, kodekantor: str
 # ---------------------------------------------------------------------------
 # SYNC: Sales Transactions (tbl_ikhd → sales_transactions)
 # ---------------------------------------------------------------------------
-def sync_sales_transactions(ipos_conn, sb: SupabaseClient, kodekantor: str,
+def sync_sales_transactions(ipos_conn, sb: InventoryClient, kodekantor: str,
                              store_id: str, days_back: int = 30) -> int:
     """Sync per-transaction data from iPOS tbl_ikhd to sales_transactions."""
     log.info(f"Syncing sales transactions for store {kodekantor} (last {days_back} days)...")
@@ -1141,11 +1114,11 @@ def run_sync(sync_type: str = "full", store_code: str = None):
 
 def _run_sync_inner(sync_type: str = "full", store_code: str = None):
     """Internal sync logic (dipanggil dari run_sync setelah lock)."""
-    if not config.SUPABASE_URL or not config.SUPABASE_SERVICE_KEY:
-        log.error("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
+    if not config.INVENTORY_API_URL or not config.INVENTORY_SYNC_TOKEN:
+        log.error("INVENTORY_API_URL and INVENTORY_SYNC_TOKEN must be set")
         return
 
-    sb = SupabaseClient(config.SUPABASE_URL, config.SUPABASE_SERVICE_KEY)
+    sb = InventoryClient(config.INVENTORY_API_URL, config.INVENTORY_SYNC_TOKEN)
 
     # Get active stores with iPOS config
     store_params = {
@@ -1262,17 +1235,20 @@ def _run_sync_inner(sync_type: str = "full", store_code: str = None):
 # Heartbeat
 # ---------------------------------------------------------------------------
 def send_heartbeat():
-    """Send heartbeat to Supabase (insert sync_log with type 'heartbeat')."""
-    if not config.SUPABASE_URL or not config.SUPABASE_SERVICE_KEY:
+    """Send heartbeat to Inventory API (insert sync_log with type 'heartbeat')."""
+    if not config.INVENTORY_API_URL or not config.INVENTORY_SYNC_TOKEN:
         return
     try:
-        sb = SupabaseClient(config.SUPABASE_URL, config.SUPABASE_SERVICE_KEY)
-        sb.insert("sync_log", [{
-            "sync_type": "heartbeat",
-            "status": "success",
-            "records_synced": 0,
-            "completed_at": datetime.utcnow().isoformat(),
-        }])
+        sb = InventoryClient(config.INVENTORY_API_URL, config.INVENTORY_SYNC_TOKEN)
+        stores = sb.select("stores", {"select": "id", "is_active": "eq.true"})
+        for store in stores:
+            sb.insert("sync_log", [{
+                "store_id": store["id"],
+                "sync_type": "heartbeat",
+                "status": "success",
+                "records_synced": 0,
+                "completed_at": datetime.utcnow().isoformat(),
+            }])
     except Exception as e:
         log.warning(f"Heartbeat failed: {e}")
 
@@ -1281,7 +1257,7 @@ def send_heartbeat():
 # CLI entry point
 # ---------------------------------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser(description="iPOS → Supabase Sync Agent")
+    parser = argparse.ArgumentParser(description="iPOS → Inventory API Sync Agent")
     parser.add_argument("--daemon", action="store_true", help="Run as daemon with scheduled sync")
     parser.add_argument("--type", choices=["full", "products", "stock", "sales", "purchases"],
                         default="full", help="Type of sync to run")
@@ -1299,7 +1275,7 @@ def main():
 
     log.info("=" * 60)
     log.info("iPOS Sync Agent started")
-    log.info(f"Supabase: {config.SUPABASE_URL}")
+    log.info(f"Inventory API: {config.INVENTORY_API_URL}")
     log.info(f"iPOS: {config.IPOS_DB_HOST}:{config.IPOS_DB_PORT}/{config.IPOS_DB_NAME}")
     if store_filter:
         log.info(f"Filter toko: {store_filter} (hanya sync toko ini)")

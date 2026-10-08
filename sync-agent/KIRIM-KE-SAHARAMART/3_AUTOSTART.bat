@@ -49,7 +49,7 @@ echo.
 echo   Sync Agent akan otomatis berjalan setiap PC dinyalakan.
 echo   Icon muncul di pojok kanan bawah (system tray).
 echo.
-echo   Data sync setiap 2 menit ke Supabase cloud.
+echo   Data sync setiap 2 menit ke server inventaris.
 echo.
 echo   Untuk cek: buka Registry Editor ^> HKCU^>SOFTWARE^>
 echo   Microsoft^>Windows^>CurrentVersion^>Run

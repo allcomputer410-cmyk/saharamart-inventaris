@@ -1,0 +1,33 @@
+name: inventaris-local
+services:
+  db:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: inventaris
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run setup-local first}
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - inventaris_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d inventaris"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  rest:
+    image: postgrest/postgrest:v13.0.6
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${REST_DB_PASSWORD}@db:5432/inventaris
+      PGRST_DB_SCHEMAS: public
+      PGRST_JWT_SECRET: ${POSTGREST_JWT_SECRET}
+      PGRST_DB_MAX_ROWS: 10000
+      PGRST_DB_POOL: 5
+    ports:
+      - "127.0.0.1:53000:3000"
+volumes:
+  inventaris_data:

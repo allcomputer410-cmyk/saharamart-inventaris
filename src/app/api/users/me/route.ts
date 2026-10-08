@@ -1,14 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-import { createServerSupabaseClient } from '@/lib/supabase/server';
-
-function getAdminClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { autoRefreshToken: false, persistSession: false } }
-  );
-}
+import { getAdminClient } from '@/lib/backend/server';
+import { createServerSupabaseClient } from '@/lib/backend/server';
 
 // GET /api/users/me — Ambil profil user yang sedang login (bypass RLS)
 export async function GET() {

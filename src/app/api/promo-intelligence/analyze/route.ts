@@ -1,13 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-// Admin client using service role key
-function getAdminClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
-}
+import { getAdminClient } from '@/lib/backend/server';
+import { requireUser, ApiError, apiError, checkOrigin } from '@/lib/backend/auth';
 
 interface ProductRow {
   id: string;
@@ -515,6 +508,16 @@ async function analyzeStore(supabase: any, storeId: string, force = false): Prom
   const debugInfo = { raw_products: rawProducts.length, stock_records: stockData.length, daily_sales: dailySaleIds.length, sale_items_aggregated: Object.keys(saleAggMap).length };
   if (recommendations.length === 0) return { count: 0, no_sale_data: noSaleData, products_with_stock: products.length, debug: debugInfo };
 
+  // Simpan dulu produk yang ada di keranjang sebelum dihapus
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: cartItems } = await (supabase as any)
+    .from('promo_recommendations')
+    .select('store_product_id')
+    .eq('store_id', storeId)
+    .eq('status', 'pending')
+    .eq('in_cart', true);
+  const cartProductIds = new Set<string>((cartItems || []).map((r: { store_product_id: string }) => r.store_product_id));
+
   // Clear old pending recommendations
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (supabase as any)
@@ -526,6 +529,17 @@ async function analyzeStore(supabase: any, storeId: string, force = false): Prom
   // Insert new recommendations
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (supabase as any).from('promo_recommendations').insert(recommendations);
+
+  // Restore in_cart untuk produk yang sebelumnya ada di keranjang
+  if (cartProductIds.size > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any)
+      .from('promo_recommendations')
+      .update({ in_cart: true })
+      .eq('store_id', storeId)
+      .eq('status', 'pending')
+      .in('store_product_id', Array.from(cartProductIds));
+  }
 
   // Create notification
   const urgentCount = recommendations.filter((r) => r.priority === 'urgent').length;
@@ -547,6 +561,9 @@ async function analyzeStore(supabase: any, storeId: string, force = false): Prom
 // POST: manual trigger or from app
 export async function POST(request: NextRequest) {
   try {
+    checkOrigin(request);
+    const caller = await requireUser();
+    if (!['direktur','owner','manajer','gm'].includes(caller.role)) throw new ApiError(403, 'Akses ditolak');
     const body = await request.json().catch(() => ({}));
     const storeId: string | undefined = body?.store_id;
     const force: boolean = body?.force === true;
@@ -583,6 +600,7 @@ export async function POST(request: NextRequest) {
       per_store: perStore,
     });
   } catch (error) {
+    if (error instanceof ApiError) return apiError(error);
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
@@ -591,8 +609,9 @@ export async function POST(request: NextRequest) {
 }
 
 // GET: called by Vercel cron (analyze all stores)
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    if (!process.env.CRON_SECRET || request.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) throw new ApiError(401, 'Akses ditolak');
     const supabase = getAdminClient();
     const perStore: { store_id: string; recommendations: number }[] = [];
 
@@ -616,6 +635,7 @@ export async function GET() {
       per_store: perStore,
     });
   } catch (error) {
+    if (error instanceof ApiError) return apiError(error);
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }

@@ -4,6 +4,7 @@
 --                        → store_products (barcode, name, hpp, sell_price)
 --                        → categories (code, name)
 
+DROP VIEW IF EXISTS v_sale_items_detail;
 CREATE OR REPLACE VIEW v_sale_items_detail AS
 SELECT
   dsi.id,

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { createClient } from '@/lib/backend/client';
 import {
   ScanLine, Search, Trash2, RotateCcw, Loader2, Plus, Minus,
   Keyboard, FileSpreadsheet, FileText, History, CheckCircle2,

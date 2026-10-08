@@ -3,7 +3,7 @@
 export const dynamic = 'force-dynamic';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { createClient } from '@/lib/supabase/client';
+import { createClient } from '@/lib/backend/client';
 import {
   Users, Plus, Pencil, X, Loader2, ToggleLeft, ToggleRight,
   ShieldCheck, Trash2, Mail, Shield, CheckSquare, Square,
@@ -236,7 +236,8 @@ export default function UsersPage() {
         });
         const data = await res.json();
         if (!data.success) { showToast('Gagal undang user: ' + data.error, 'error'); return; }
-        showToast(`Undangan dikirim ke ${formEmail}`);
+        if (data.activation_url) window.prompt('Akun dibuat. Salin tautan aktivasi ini dan bagikan kepada pengguna (berlaku 24 jam):', data.activation_url);
+        showToast('Akun dibuat; tautan aktivasi siap dibagikan');
       }
 
       setShowModal(false);
@@ -523,7 +524,7 @@ export default function UsersPage() {
         <Mail className="w-4 h-4 mt-0.5 shrink-0" />
         <div>
           <p className="font-medium mb-0.5">Cara Menambah User</p>
-          <p className="text-xs">Klik &quot;Tambah User&quot;, isi email dan role, pilih fitur yang dapat diakses, lalu klik Kirim Undangan. User akan menerima email untuk mengatur password.</p>
+          <p className="text-xs">Klik &quot;Tambah User&quot;, isi email dan role, pilih fitur yang dapat diakses, lalu klik Kirim Undangan. Salin tautan aktivasi yang muncul dan bagikan kepada pengguna untuk mengatur password.</p>
         </div>
       </div>
 

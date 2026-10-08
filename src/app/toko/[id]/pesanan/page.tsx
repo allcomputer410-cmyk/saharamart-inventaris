@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { createClient } from '@/lib/backend/client';
 import {
   ShoppingCart, Search, CheckCircle2, Loader2, ChevronDown, ChevronUp,
   Plus, Trash2, Send, AlertTriangle, PackageSearch, X, MonitorSmartphone,
@@ -472,38 +472,35 @@ function PesananContent() {
 
   // ── Supabase Realtime: deteksi stok bertambah setelah sync iPOS ───────────
   useEffect(() => {
-    const channel = supabase
-      .channel(`stock-watch-${storeId}`)
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'stock' },
-        (payload: { new: Record<string, unknown>; old: Record<string, unknown> }) => {
-          const productId = payload.new?.store_product_id as string;
-          const newQty = payload.new?.current_qty as number;
-          const oldQty = payload.old?.current_qty as number;
-          if (
-            productId &&
-            awaitingSyncProductsRef.current.has(productId) &&
-            typeof newQty === 'number' &&
-            typeof oldQty === 'number' &&
-            newQty > oldQty
-          ) {
+    let cancelled = false;
+    let checking = false;
+    const previous = new Map<string, number>();
+    const check = async () => {
+      const ids = Array.from(awaitingSyncProductsRef.current);
+      if (checking || !ids.length || document.visibilityState !== 'visible') return;
+      checking = true;
+      try {
+        const { data, error } = await supabase.from('stock').select('store_product_id,current_qty')
+          .eq('store_id', storeId).in('store_product_id', ids);
+        if (cancelled || error) return;
+        for (const row of data || []) {
+          const quantity = Number(row.current_qty);
+          const old = previous.get(row.store_product_id);
+          previous.set(row.store_product_id, quantity);
+          if (old !== undefined && quantity > old) {
             playSyncConfirmSound();
             setSyncNotification('Stok sudah bertambah dari sync iPOS');
-            awaitingSyncProductsRef.current.delete(productId);
-
-            // Hentikan interval reminder — stok sudah dikonfirmasi masuk
-            if (reminderIntervalRef.current) {
-              clearInterval(reminderIntervalRef.current);
-              reminderIntervalRef.current = null;
-            }
-            setIposReminder(null); // tutup banner amber juga
+            awaitingSyncProductsRef.current.delete(row.store_product_id);
+            previous.delete(row.store_product_id);
+            if (reminderIntervalRef.current) { clearInterval(reminderIntervalRef.current); reminderIntervalRef.current = null; }
+            setIposReminder(null);
           }
         }
-      )
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
+      } finally { checking = false; }
+    };
+    const timer = window.setInterval(() => { void check(); }, 5000);
+    void check();
+    return () => { cancelled = true; window.clearInterval(timer); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId]);
 

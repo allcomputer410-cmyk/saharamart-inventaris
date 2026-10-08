@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { createClient } from '@/lib/backend/client';
 import {
   Search,
   Filter,
@@ -159,6 +159,23 @@ export default function MasterProdukPage() {
 
     const updates = Object.entries(editState);
     let errorCount = 0;
+
+    // Validasi HPP vs Harga Jual sebelum save
+    const invalidProducts: string[] = [];
+    for (const [productId, changes] of updates) {
+      const currentProduct = products.find((p) => p.id === productId);
+      if (!currentProduct) continue;
+      const finalHpp = changes.hpp ?? currentProduct.hpp;
+      const finalSellPrice = changes.sell_price ?? currentProduct.sell_price;
+      if (finalHpp > 0 && finalSellPrice > 0 && finalHpp >= finalSellPrice) {
+        invalidProducts.push(currentProduct.name);
+      }
+    }
+    if (invalidProducts.length > 0) {
+      alert(`HPP tidak boleh >= Harga Jual pada produk berikut:\n${invalidProducts.join('\n')}`);
+      setSaving(false);
+      return;
+    }
 
     for (const [productId, changes] of updates) {
       // Separate stock fields from product fields

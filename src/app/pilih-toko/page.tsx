@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { createClient } from '@/lib/backend/client';
 import { Store as StoreIcon, MapPin, Loader2, LogOut, Warehouse } from 'lucide-react';
 import type { Store } from '@/types/database';
 

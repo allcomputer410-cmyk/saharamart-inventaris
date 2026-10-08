@@ -309,7 +309,7 @@ CREATE TABLE notifications (
 -- ════ VIEWS ════
 
 CREATE VIEW v_critical_stock AS
-  SELECT s.store_id, sp.barcode, sp.name, sp.hpp, sp.sell_price,
+  SELECT st.store_id, sp.barcode, sp.name, sp.hpp, sp.sell_price,
     st.current_qty, st.max_qty, st.min_qty,
     CASE WHEN st.current_qty <= st.min_qty THEN 'KRITIS'
          WHEN st.current_qty <= st.max_qty * 0.5 THEN 'RENDAH'

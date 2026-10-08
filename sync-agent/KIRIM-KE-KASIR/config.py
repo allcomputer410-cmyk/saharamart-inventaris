@@ -35,3 +35,7 @@ STORE_CODE = os.getenv("STORE_CODE", "")
 
 # Log level
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+# Backend inventaris mandiri; token dibatasi untuk satu toko.
+INVENTORY_API_URL = os.getenv("INVENTORY_API_URL", "")
+INVENTORY_SYNC_TOKEN = os.getenv("INVENTORY_SYNC_TOKEN", "")

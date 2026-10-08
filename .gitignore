@@ -28,6 +28,10 @@ yarn-error.log*
 # local env files
 .env*.local
 .env
+.env.clone
+.env.selfhost
+.env.deliveryku
+docs/devops-clone/.env.clone
 sync-agent/.env
 sync-agent/sync_agent.log
 sync-agent/KIRIM-KE-KASIR/.env
@@ -58,3 +62,14 @@ sync-agent/*.spec
 next-env.d.ts
 
 .vercel
+clone-data/
+
+# Local PostgreSQL recovery artifacts and credentials
+/backend/.env
+/backend/private/
+/backup-supabase/
+/qa-backend/
+
+# Backup .env lama sync agent (berisi key)
+sync-agent/**/.env.*
+!sync-agent/.env.example
