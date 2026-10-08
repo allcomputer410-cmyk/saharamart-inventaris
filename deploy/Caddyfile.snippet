@@ -1,0 +1,17 @@
+# Tambahkan blok ini ke Caddyfile VPS, lalu reload Caddy.
+# Ganti domain sesuai yang Anda pakai. Caddy mengurus sertifikat HTTPS otomatis.
+#
+# Pakai subdomain sendiri:
+inventaris.deliveryku.com {
+    reverse_proxy 127.0.0.1:3100
+}
+#
+# Atau tanpa beli domain, pakai sslip.io (otomatis menunjuk ke IP VPS):
+# inventaris.139-190-96-48.sslip.io {
+#     reverse_proxy 127.0.0.1:3100
+# }
+#
+# Catatan:
+# - Port 3100 harus sama dengan APP_PORT di deploy/.env.
+# - Nilai domain ini harus sama dengan APP_ORIGIN di deploy/.env (termasuk https://).
+# - Reload: caddy reload --config /path/ke/Caddyfile   (atau: docker exec <caddy> caddy reload ...)

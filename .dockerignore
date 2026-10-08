@@ -1,0 +1,23 @@
+node_modules
+.next
+.git
+.gitignore
+npm-debug.log
+.env
+.env.local
+.env.*.local
+backend/.env
+backend/private
+deploy/.env
+deploy/private
+sync-agent
+qa-backend
+backup-supabase
+clone-data
+supabase/clone-data
+docs
+*.zip
+*.rar
+*.pdf
+contoh db .i4bu
+tsconfig.tsbuildinfo

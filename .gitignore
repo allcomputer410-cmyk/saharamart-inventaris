@@ -73,3 +73,7 @@ clone-data/
 # Backup .env lama sync agent (berisi key)
 sync-agent/**/.env.*
 !sync-agent/.env.example
+
+# Deploy VPS — secret & dump (jangan commit)
+/deploy/.env
+/deploy/private/
