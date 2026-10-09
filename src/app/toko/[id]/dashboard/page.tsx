@@ -12,7 +12,7 @@ import {
   ArrowRight,
   Bell,
 } from 'lucide-react';
-import { formatRupiah, formatQty } from '@/lib/utils';
+import { formatRupiah, formatQty, todayLocal } from '@/lib/utils';
 
 interface DashboardStats {
   totalProducts: number;
@@ -74,8 +74,8 @@ export default function DashboardTokoPage() {
           .from('daily_sales')
           .select('total_revenue, total_transactions')
           .eq('store_id', storeId)
-          .eq('sale_date', new Date().toISOString().split('T')[0])
-          .single(),
+          .eq('sale_date', todayLocal())
+          .maybeSingle(),
 
         // Recent notifications
         supabase
@@ -86,40 +86,34 @@ export default function DashboardTokoPage() {
           .limit(5),
       ]);
 
-      // Critical stock — paginated agar tidak miss jika produk > 1000
-      let criticalCount = 0;
+      // Critical stock — dihitung di database (view v_stock_critical: min_qty > 0 AND current_qty <= min_qty).
+      // Detail produk hanya untuk 5 teratas.
+      const { data: criticalData, count: criticalTotal } = await supabase
+        .from('v_stock_critical')
+        .select('store_product_id, current_qty, min_qty, max_qty', { count: 'exact' })
+        .eq('store_id', storeId)
+        .order('current_qty', { ascending: true })
+        .order('store_product_id', { ascending: true })
+        .limit(5);
+      const criticalCount = criticalTotal || 0;
+      const criticalRows: { store_product_id: string; current_qty: number; min_qty: number; max_qty: number }[] = criticalData || [];
       const criticalList: CriticalProduct[] = [];
-      {
-        const PAGE = 1000;
-        let offset = 0;
-        while (true) {
-          const { data } = await supabase
-            .from('stock')
-            .select(`
-              current_qty, min_qty, max_qty,
-              store_product:store_products(id, barcode, name, supplier:suppliers(name))
-            `)
-            .eq('store_id', storeId)
-            .gt('min_qty', 0)
-            .order('current_qty', { ascending: true })
-            .range(offset, offset + PAGE - 1);
-          if (!data || data.length === 0) break;
-          for (const row of data) {
-            if (row.current_qty <= row.min_qty) {
-              criticalCount++;
-              const sp = Array.isArray(row.store_product) ? row.store_product[0] : row.store_product;
-              if (sp) {
-                const sup = Array.isArray(sp.supplier) ? sp.supplier[0] : sp.supplier;
-                criticalList.push({
-                  id: sp.id, barcode: sp.barcode, name: sp.name,
-                  current_qty: row.current_qty, min_qty: row.min_qty, max_qty: row.max_qty,
-                  supplier_name: sup?.name || null,
-                });
-              }
-            }
-          }
-          if (data.length < PAGE) break;
-          offset += PAGE;
+      if (criticalRows.length > 0) {
+        const { data: products } = await supabase
+          .from('store_products')
+          .select('id, barcode, name, supplier:suppliers(name)')
+          .in('id', criticalRows.map((r) => r.store_product_id));
+        type ProductRow = { id: string; barcode: string; name: string; supplier: { name: string } | { name: string }[] | null };
+        const byId = new Map(((products || []) as ProductRow[]).map((p) => [p.id, p]));
+        for (const row of criticalRows) {
+          const sp = byId.get(row.store_product_id);
+          if (!sp) continue;
+          const sup = Array.isArray(sp.supplier) ? sp.supplier[0] : sp.supplier;
+          criticalList.push({
+            id: sp.id, barcode: sp.barcode, name: sp.name,
+            current_qty: row.current_qty, min_qty: row.min_qty, max_qty: row.max_qty,
+            supplier_name: sup?.name || null,
+          });
         }
       }
 

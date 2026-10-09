@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { ApiError, apiError, checkOrigin, digest, internalJwt, requireUser } from './auth';
 import { db } from './db';
 
-export const DATA_TABLES = new Set(`operational_costs audit_log brands categories cek_stok_session_items cek_stok_sessions daily_sale_items daily_sales notifications order_items orders payment_method_overrides promo_products promo_recommendations promo_rules promotions purchase_items purchases stock stock_movements stock_opname_items stock_opnames store_item_discounts store_products store_suppliers stores suppliers sync_log units user_profiles warehouse_transfer_items warehouse_transfers v_critical_stock v_margin_rendah v_rekap_kasir v_sale_items_detail`.split(' '));
+export const DATA_TABLES = new Set(`operational_costs audit_log brands categories cek_stok_session_items cek_stok_sessions daily_sale_items daily_sales notifications order_items orders payment_method_overrides promo_products promo_recommendations promo_rules promotions purchase_items purchases stock stock_movements stock_opname_items stock_opnames store_item_discounts store_products store_suppliers stores suppliers sync_log units user_profiles warehouse_transfer_items warehouse_transfers v_critical_stock v_stock_critical v_margin_rendah v_rekap_kasir v_sale_items_detail`.split(' '));
 const SYNC_TABLES = new Set(`stores categories brands suppliers store_suppliers store_products stock stock_movements daily_sales daily_sale_items purchases purchase_items sales_transactions store_item_discounts sync_log audit_log`.split(' '));
 export async function proxy(request: NextRequest, path: string[], sync = false) {
   try {

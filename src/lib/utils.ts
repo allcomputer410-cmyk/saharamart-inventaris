@@ -24,6 +24,13 @@ export function formatQty(qty: number): string {
   });
 }
 
+// Tanggal hari ini (YYYY-MM-DD) menurut jam lokal, bukan UTC.
+// toISOString() memakai UTC sehingga jam 00.00–07.00 WIB masih terbaca "kemarin".
+export function todayLocal(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 // Format tanggal ke format Indonesia
 export function formatDate(date: string | Date): string {
   return new Intl.DateTimeFormat('id-ID', {

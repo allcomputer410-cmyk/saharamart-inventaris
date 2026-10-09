@@ -13,7 +13,7 @@ import {
   ShoppingCart,
   Lightbulb,
 } from 'lucide-react';
-import { formatRupiah } from '@/lib/utils';
+import { formatRupiah, todayLocal } from '@/lib/utils';
 import {
   BarChart,
   Bar,
@@ -56,7 +56,7 @@ export default function GlobalDashboardPage() {
         return;
       }
 
-      const today = new Date().toISOString().split('T')[0];
+      const today = todayLocal();
       const stats: StoreStats[] = [];
 
       for (const store of stores) {
@@ -77,7 +77,7 @@ export default function GlobalDashboardPage() {
             .select('total_revenue')
             .eq('store_id', store.id)
             .eq('sale_date', today)
-            .single(),
+            .maybeSingle(),
           supabase
             .from('promo_recommendations')
             .select('id', { count: 'exact', head: true })
@@ -86,20 +86,12 @@ export default function GlobalDashboardPage() {
             .eq('priority', 'urgent'),
         ]);
 
-        // Paginate critical stock to avoid 1000-row Supabase limit
-        const STOCK_PAGE = 1000;
-        let stockOffset = 0;
-        let criticalCount = 0;
-        while (true) {
-          const { data: stockBatch } = await supabase
-            .from('stock').select('current_qty, min_qty')
-            .eq('store_id', store.id).gt('min_qty', 0)
-            .range(stockOffset, stockOffset + STOCK_PAGE - 1);
-          if (!stockBatch || stockBatch.length === 0) break;
-          criticalCount += stockBatch.filter(s => s.current_qty <= s.min_qty).length;
-          if (stockBatch.length < STOCK_PAGE) break;
-          stockOffset += STOCK_PAGE;
-        }
+        // Critical stock dihitung di database (view v_stock_critical)
+        const { count: criticalTotal } = await supabase
+          .from('v_stock_critical')
+          .select('store_product_id', { count: 'exact', head: true })
+          .eq('store_id', store.id);
+        const criticalCount = criticalTotal || 0;
 
         stats.push({
           storeId: store.id,
