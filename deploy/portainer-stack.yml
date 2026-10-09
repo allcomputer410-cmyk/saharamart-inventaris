@@ -1,0 +1,44 @@
+# Stack Portainer "inventaris" — PostgREST + app Next.js di VPS bersama.
+# Deploy: Portainer → Stacks → Add stack → Repository (lihat deploy/PORTAINER.md).
+# Database TIDAK dibuat di sini: memakai Postgres yang sudah ada di
+# ${DB_HOST} (default postgres.locadev.id), database "inventaris".
+# Variabel ${...} diisi lewat Portainer: "Load variables from .env file"
+# (file dibuat oleh deploy/private/siapkan-vps.ps1).
+# Domain: Caddy (caddy-proxy, network web-network) -> inventaris-app:3000.
+
+services:
+  rest:
+    image: postgrest/postgrest:v13.0.6
+    container_name: inventaris-rest
+    restart: unless-stopped
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${REST_DB_PASSWORD}@${DB_HOST:-postgres.locadev.id}:${DB_PORT:-5432}/inventaris
+      PGRST_DB_SCHEMAS: public
+      PGRST_JWT_SECRET: ${POSTGREST_JWT_SECRET}
+      PGRST_DB_MAX_ROWS: 10000
+      PGRST_DB_POOL: 5
+    networks: [internal]
+
+  app:
+    # Di-build langsung oleh Portainer dari repo (tidak perlu image registry).
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: saharamart-inventaris:latest
+    container_name: inventaris-app
+    restart: unless-stopped
+    depends_on: [rest]
+    environment:
+      DATABASE_URL: postgres://inventaris_app:${APP_DB_PASSWORD}@${DB_HOST:-postgres.locadev.id}:${DB_PORT:-5432}/inventaris
+      POSTGREST_URL: http://inventaris-rest:3000
+      POSTGREST_JWT_SECRET: ${POSTGREST_JWT_SECRET}
+      APP_ORIGIN: ${APP_ORIGIN}
+      CRON_SECRET: ${CRON_SECRET}
+      NODE_ENV: production
+    networks: [internal, web]
+
+networks:
+  internal: {}
+  web:
+    name: web-network
+    external: true
